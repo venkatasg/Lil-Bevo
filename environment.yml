@@ -2,14 +2,15 @@ name: bevo
 channels:
   - pytorch-nightly
   - huggingface
+  - conda-forge
   - defaults
 dependencies:
   - _libgcc_mutex=0.1=main
   - _openmp_mutex=5.1=1_gnu
   - blas=1.0=mkl
   - bzip2=1.0.8=h7b6447c_0
-  - ca-certificates=2023.01.10=h06a4308_0
-  - certifi=2022.12.7=py38h06a4308_0
+  - ca-certificates=2022.12.7=ha878542_0
+  - certifi=2022.12.7=pyhd8ed1ab_0
   - cffi=1.15.1=py38h5eee18b_3
   - charset-normalizer=2.0.4=pyhd3eb1b0_0
   - click=8.0.4=py38h06a4308_0
@@ -18,6 +19,7 @@ dependencies:
   - ffmpeg=4.2.2=h20bf706_0
   - filelock=3.9.0=py38h06a4308_0
   - freetype=2.12.1=h4a9f257_0
+  - gh=2.25.1=ha8f183a_0
   - giflib=5.2.1=h5eee18b_3
   - gmp=6.2.1=h295c915_3
   - gmpy2=2.1.2=py38heeb90bb_0
