@@ -13,3 +13,7 @@ conda env create -f environment.yaml
 ``` 
 
 This will create an environment called `bevo` with all required packages. `CUDA` support might need to be configured separately depending on the machine you're running it on.
+
+`environment.yml` has specific build information. If you are running into dependency or package version issues, use `environment_nobuild.yml`, and conda will resolve all dependencies to your specific machine.
+
+To push to the repo and commit changes, run `gh auth login`, and supply a GitHub [personal access token](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/creating-a-personal-access-token).

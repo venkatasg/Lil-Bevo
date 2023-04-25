@@ -1,0 +1,10 @@
+name: bevo
+channels:
+  - pytorch-nightly
+  - huggingface
+  - conda-forge
+  - defaults
+dependencies:
+  - gh
+  - pytorch=2.1.0
+  - transformers=4.28.1
