@@ -110,16 +110,16 @@ class Block(nn.Module):
         return x
 
 @dataclass
-class GPTConfig:
+class BevoConfig:
     block_size: int = 1024
-    vocab_size: int = 50304 # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
+    vocab_size: int = 32000 # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
     n_layer: int = 12
     n_head: int = 12
     n_embd: int = 768
     dropout: float = 0.0
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
 
-class GPT(nn.Module):
+class Bevo(nn.Module):
 
     def __init__(self, config):
         super().__init__()
@@ -127,12 +127,6 @@ class GPT(nn.Module):
         assert config.block_size is not None
         self.config = config
         
-        # Use our own tokenizer trained on the BabyLM data
-        self.tokenizer = LlamaTokenizerFast(
-            vocab_file='tokenizers/babylm_10m_uni_16k.model',
-            tokenizer_file=''
-        )
-
         self.transformer = nn.ModuleDict(dict(
             wte = nn.Embedding(config.vocab_size, config.n_embd),
             wpe = nn.Embedding(config.block_size, config.n_embd),
@@ -238,8 +232,8 @@ class GPT(nn.Module):
             print(f"overriding dropout rate to {override_args['dropout']}")
             config_args['dropout'] = override_args['dropout']
         # create a from-scratch initialized minGPT model
-        config = GPTConfig(**config_args)
-        model = GPT(config)
+        config = BevoConfig(**config_args)
+        model = Bevo(config)
         sd = model.state_dict()
         sd_keys = sd.keys()
         sd_keys = [k for k in sd_keys if not k.endswith('.attn.bias')] # discard this mask / buffer, not a param
