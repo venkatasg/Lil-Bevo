@@ -123,9 +123,10 @@ def arg_parse():
         help="Always save checkpoint regardless of whether validation loss goes down"
     )
     parser.add_argument(
-        '--cpu',
-        action='store_true',
-        help="Run on cpu only"
+        '--device',
+        type=str,
+        default='cuda', 
+        help="cpu, cuda, mps"
     )
     parser.add_argument(
         '--init_from',
@@ -168,7 +169,7 @@ if __name__=="__main__":
     bias = False # do we use bias inside LayerNorm and Linear layers?
     # adamw optimizer
     learning_rate = 6e-4 # max learning rate
-    max_iters = 600000 # total number of training iterations
+    max_iters = 100000 # total number of training iterations
     weight_decay = 1e-1
     beta1 = 0.9
     beta2 = 0.95
@@ -178,7 +179,7 @@ if __name__=="__main__":
     warmup_iters = 2000 # how many steps to warm up for
     lr_decay_iters = 600000 # should be ~= max_iters per Chinchilla
     min_lr = 6e-5 # minimum learning rate, should be ~= learning_rate/10 per Chinchilla
-    device = 'cuda' if not args.cpu else 'cpu' # macbook mps is possible with a different environment setup I believe
+    device = args.device
     # DDP settings
     backend = 'nccl' # 'nccl', 'gloo', etc.
     # system
@@ -475,7 +476,7 @@ if __name__=="__main__":
             config=model_config
         )
     if master_process:
-        print("Number of batches(iterations): ", len(train_dataloader.dataset)//args.batch_size)
+        print("Total number of batches: ", len(train_dataloader.dataset)//args.batch_size)
     # Training loop
     t0 = time.time()
     local_iter_num = 0 # number of iterations in the lifetime of this process
