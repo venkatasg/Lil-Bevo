@@ -207,47 +207,47 @@ class Bevo(nn.Module):
             if hasattr(block.attn, 'bias'):
                 block.attn.bias = block.attn.bias[:,:,:block_size,:block_size]
 
-#     def to_hf(self):
-#         override_args = {} # default to empty dict
-#         # only dropout can be overridden see more notes below
-#         assert all(k == 'dropout' for k in override_args)
-#         from transformers import AutoModelForCausalLM
-#         
-#         # we can override the dropout rate, if desired
-#         if 'dropout' in override_args:
-#             print(f"overriding dropout rate to {override_args['dropout']}")
-#             config_args['dropout'] = override_args['dropout']
-#         
-#         config = self.config
-#         sd = self.state_dict()
-#         sd_keys = sd.keys()
-#         sd_keys = [k for k in sd_keys if not k.endswith('.attn.bias')] # discard this mask / buffer, not a param
-# 
-#         # init a huggingface/transformers model
-#         model_hf = AutoModelForCausalLM.from_pretrained()
-#         sd_hf = model_hf.state_dict()
-# 
-#         # copy while ensuring all of the parameters are aligned and match in names and shapes
-#         sd_keys_hf = sd_hf.keys()
-#         sd_keys_hf = [k for k in sd_keys_hf if not k.endswith('.attn.masked_bias')] # ignore these, just a buffer
-#         sd_keys_hf = [k for k in sd_keys_hf if not k.endswith('.attn.bias')] # same, just the mask (buffer)
-#         transposed = ['attn.c_attn.weight', 'attn.c_proj.weight', 'mlp.c_fc.weight', 'mlp.c_proj.weight']
-#         # basically the openai checkpoints use a "Conv1D" module, but we only want to use a vanilla Linear
-#         # this means that we have to transpose these weights when we import them
-#         assert len(sd_keys_hf) == len(sd_keys), f"mismatched keys: {len(sd_keys_hf)} != {len(sd_keys)}"
-#         for k in sd_keys_hf:
-#             if any(k.endswith(w) for w in transposed):
-#                 # special treatment for the Conv1D weights we need to transpose
-#                 assert sd_hf[k].shape[::-1] == sd[k].shape
-#                 with torch.no_grad():
-#                     sd_hf[k].copy_(sd[k].t())
-#             else:
-#                 # vanilla copy over the other parameters
-#                 assert sd[k].shape == sd_hf[k].shape
-#                 with torch.no_grad():
-#                     sd_hf[k].copy_(sd[k])
-# 
-#         return model_hf
+    def to_hf(self):
+        override_args = {} # default to empty dict
+        # only dropout can be overridden see more notes below
+        assert all(k == 'dropout' for k in override_args)
+        from transformers import AutoModelForCausalLM
+        
+        # we can override the dropout rate, if desired
+        if 'dropout' in override_args:
+            print(f"overriding dropout rate to {override_args['dropout']}")
+            config_args['dropout'] = override_args['dropout']
+        
+        config = self.config
+        sd = self.state_dict()
+        sd_keys = sd.keys()
+        sd_keys = [k for k in sd_keys if not k.endswith('.attn.bias')] # discard this mask / buffer, not a param
+
+        # init a huggingface/transformers model
+        model_hf = AutoModelForCausalLM.from_pretrained()
+        sd_hf = model_hf.state_dict()
+
+        # copy while ensuring all of the parameters are aligned and match in names and shapes
+        sd_keys_hf = sd_hf.keys()
+        sd_keys_hf = [k for k in sd_keys_hf if not k.endswith('.attn.masked_bias')] # ignore these, just a buffer
+        sd_keys_hf = [k for k in sd_keys_hf if not k.endswith('.attn.bias')] # same, just the mask (buffer)
+        transposed = ['attn.c_attn.weight', 'attn.c_proj.weight', 'mlp.c_fc.weight', 'mlp.c_proj.weight']
+        # basically the openai checkpoints use a "Conv1D" module, but we only want to use a vanilla Linear
+        # this means that we have to transpose these weights when we import them
+        assert len(sd_keys_hf) == len(sd_keys), f"mismatched keys: {len(sd_keys_hf)} != {len(sd_keys)}"
+        for k in sd_keys_hf:
+            if any(k.endswith(w) for w in transposed):
+                # special treatment for the Conv1D weights we need to transpose
+                assert sd_hf[k].shape[::-1] == sd[k].shape
+                with torch.no_grad():
+                    sd_hf[k].copy_(sd[k].t())
+            else:
+                # vanilla copy over the other parameters
+                assert sd[k].shape == sd_hf[k].shape
+                with torch.no_grad():
+                    sd_hf[k].copy_(sd[k])
+
+        return model_hf
 
     def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
         """
