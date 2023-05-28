@@ -5,7 +5,7 @@ Taken from Andrej Karpathy's nanoGPT: https://github.com/karpathy/nanoGPT/
 
 import math
 import inspect
-from dataclasses import dataclass
+from transformers import PreTrainedModel, PretrainedConfig
 
 import torch
 import torch.nn as nn
@@ -34,16 +34,16 @@ class CausalSelfAttention(nn.Module):
 
     def __init__(self, config):
         super().__init__()
-        assert config.n_embd % config.n_head == 0
+        assert config.hidden_size % config.num_attention_heads == 0
         # key, query, value projections for all heads, but in a batch
-        self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
+        self.c_attn = nn.Linear(config.hidden_size, 3 * config.hidden_size, bias=config.bias)
         # output projection
-        self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
+        self.c_proj = nn.Linear(config.hidden_size, config.hidden_size, bias=config.bias)
         # regularization
         self.attn_dropout = nn.Dropout(config.dropout)
         self.resid_dropout = nn.Dropout(config.dropout)
-        self.n_head = config.n_head
-        self.n_embd = config.n_embd
+        self.num_attention_heads = config.num_attention_heads
+        self.hidden_size = config.hidden_size
         self.dropout = config.dropout
         # flash attention make GPU go brrrrr but support is only in PyTorch >= 2.0
         self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
@@ -54,13 +54,13 @@ class CausalSelfAttention(nn.Module):
                                         .view(1, 1, config.block_size, config.block_size))
 
     def forward(self, x):
-        B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
+        B, T, C = x.size() # batch size, sequence length, embedding dimensionality (hidden_size)
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
-        q, k, v  = self.c_attn(x).split(self.n_embd, dim=2)
-        k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        q, k, v  = self.c_attn(x).split(self.hidden_size, dim=2)
+        k = k.view(B, T, self.num_attention_heads, C // self.num_attention_heads).transpose(1, 2) # (B, nh, T, hs)
+        q = q.view(B, T, self.num_attention_heads, C // self.num_attention_heads).transpose(1, 2) # (B, nh, T, hs)
+        v = v.view(B, T, self.num_attention_heads, C // self.num_attention_heads).transpose(1, 2) # (B, nh, T, hs)
 
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         if self.flash:
@@ -83,8 +83,8 @@ class MLP(nn.Module):
 
     def __init__(self, config):
         super().__init__()
-        self.c_fc    = nn.Linear(config.n_embd, 4 * config.n_embd, bias=config.bias)
-        self.c_proj  = nn.Linear(4 * config.n_embd, config.n_embd, bias=config.bias)
+        self.c_fc    = nn.Linear(config.hidden_size, 4 * config.hidden_size, bias=config.bias)
+        self.c_proj  = nn.Linear(4 * config.hidden_size, config.hidden_size, bias=config.bias)
         self.dropout = nn.Dropout(config.dropout)
         self.gelu = nn.GELU(approximate='tanh')
 
@@ -99,9 +99,9 @@ class Block(nn.Module):
 
     def __init__(self, config):
         super().__init__()
-        self.ln_1 = LayerNorm(config.n_embd, bias=config.bias)
+        self.ln_1 = LayerNorm(config.hidden_size, bias=config.bias)
         self.attn = CausalSelfAttention(config)
-        self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
+        self.ln_2 = LayerNorm(config.hidden_size, bias=config.bias)
         self.mlp = MLP(config)
 
     def forward(self, x):
@@ -109,32 +109,47 @@ class Block(nn.Module):
         x = x + self.mlp(self.ln_2(x))
         return x
 
-@dataclass
-class BevoConfig:
-    block_size: int = 1024
-    vocab_size: int = 32000 # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
-    n_layer: int = 12
-    n_head: int = 12
-    n_embd: int = 768
-    dropout: float = 0.0
-    bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
+class BevoForCausalLMConfig(PretrainedConfig):
+    
+    def __init__(
+        self,
+        block_size: int = 1024,
+        vocab_size: int = 32000,
+        num_hidden_layers: int = 12,
+        num_attention_heads: int = 12,
+        hidden_size: int = 768,
+        dropout: float = 0.0,
+        bias: bool = True, # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
+        is_decoder: bool = True,
+        **kwargs,
+    ):
+    
+        self.block_size = block_size
+        self.dropout = dropout
+        self.bias = bias
+        super().__init__(
+            vocab_size=vocab_size, 
+            is_decoder=is_decoder,
+            hidden_size=hidden_size,
+            num_attention_heads=num_attention_heads,
+            num_hidden_layers=num_hidden_layers,
+            **kwargs
+        )
 
-class Bevo(nn.Module):
+class BevoForCausalLM(PreTrainedModel):
 
     def __init__(self, config):
-        super().__init__()
-        assert config.vocab_size is not None
+        super().__init__(config=config)
         assert config.block_size is not None
-        self.config = config
         
         self.transformer = nn.ModuleDict(dict(
-            wte = nn.Embedding(config.vocab_size, config.n_embd),
-            wpe = nn.Embedding(config.block_size, config.n_embd),
+            wte = nn.Embedding(config.vocab_size, config.hidden_size),
+            wpe = nn.Embedding(config.block_size, config.hidden_size),
             drop = nn.Dropout(config.dropout),
-            h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
-            ln_f = LayerNorm(config.n_embd, bias=config.bias),
+            h = nn.ModuleList([Block(config) for _ in range(config.num_hidden_layers)]),
+            ln_f = LayerNorm(config.hidden_size, bias=config.bias),
         ))
-        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
         # with weight tying when using torch.compile() some warnings get generated:
         # "UserWarning: functional_call was passed multiple values for tied weights.
         # This behavior is deprecated and will be an error in future versions"
@@ -146,7 +161,7 @@ class Bevo(nn.Module):
         # apply special scaled init to the residual projections, per GPT-2 paper
         for pn, p in self.named_parameters():
             if pn.endswith('c_proj.weight'):
-                torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
+                torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.num_hidden_layers))
 
         # report number of parameters
         print("number of parameters: %.2fM" % (self.get_num_params()/1e6,))
@@ -178,8 +193,8 @@ class Bevo(nn.Module):
         pos = torch.arange(0, t, dtype=torch.long, device=device).unsqueeze(0) # shape (1, t)
 
         # forward the GPT model itself
-        tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
-        pos_emb = self.transformer.wpe(pos) # position embeddings of shape (1, t, n_embd)
+        tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, hidden_size)
+        pos_emb = self.transformer.wpe(pos) # position embeddings of shape (1, t, hidden_size)
         x = self.transformer.drop(tok_emb + pos_emb)
         for block in self.transformer.h:
             x = block(x)
@@ -206,48 +221,6 @@ class Bevo(nn.Module):
         for block in self.transformer.h:
             if hasattr(block.attn, 'bias'):
                 block.attn.bias = block.attn.bias[:,:,:block_size,:block_size]
-
-#     def to_hf(self):
-#         override_args = {} # default to empty dict
-#         # only dropout can be overridden see more notes below
-#         assert all(k == 'dropout' for k in override_args)
-#         from transformers import AutoModelForCausalLM
-#         
-#         # we can override the dropout rate, if desired
-#         if 'dropout' in override_args:
-#             print(f"overriding dropout rate to {override_args['dropout']}")
-#             config_args['dropout'] = override_args['dropout']
-#         
-#         config = self.config
-#         sd = self.state_dict()
-#         sd_keys = sd.keys()
-#         sd_keys = [k for k in sd_keys if not k.endswith('.attn.bias')] # discard this mask / buffer, not a param
-# 
-#         # init a huggingface/transformers model
-#         model_hf = AutoModelForCausalLM.from_pretrained()
-#         sd_hf = model_hf.state_dict()
-# 
-#         # copy while ensuring all of the parameters are aligned and match in names and shapes
-#         sd_keys_hf = sd_hf.keys()
-#         sd_keys_hf = [k for k in sd_keys_hf if not k.endswith('.attn.masked_bias')] # ignore these, just a buffer
-#         sd_keys_hf = [k for k in sd_keys_hf if not k.endswith('.attn.bias')] # same, just the mask (buffer)
-#         transposed = ['attn.c_attn.weight', 'attn.c_proj.weight', 'mlp.c_fc.weight', 'mlp.c_proj.weight']
-#         # basically the openai checkpoints use a "Conv1D" module, but we only want to use a vanilla Linear
-#         # this means that we have to transpose these weights when we import them
-#         assert len(sd_keys_hf) == len(sd_keys), f"mismatched keys: {len(sd_keys_hf)} != {len(sd_keys)}"
-#         for k in sd_keys_hf:
-#             if any(k.endswith(w) for w in transposed):
-#                 # special treatment for the Conv1D weights we need to transpose
-#                 assert sd_hf[k].shape[::-1] == sd[k].shape
-#                 with torch.no_grad():
-#                     sd_hf[k].copy_(sd[k].t())
-#             else:
-#                 # vanilla copy over the other parameters
-#                 assert sd[k].shape == sd_hf[k].shape
-#                 with torch.no_grad():
-#                     sd_hf[k].copy_(sd[k])
-# 
-#         return model_hf
 
     def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
         """
@@ -313,7 +286,7 @@ class Bevo(nn.Module):
         # see PaLM paper Appendix B as ref: https://arxiv.org/abs/2204.02311
         N = self.get_num_params()
         cfg = self.config
-        L, H, Q, T = cfg.n_layer, cfg.n_head, cfg.n_embd//cfg.n_head, cfg.block_size
+        L, H, Q, T = cfg.num_hidden_layers, cfg.num_attention_heads, cfg.hidden_size//cfg.num_attention_heads, cfg.block_size
         flops_per_token = 6*N + 12*L*H*Q*T
         flops_per_fwdbwd = flops_per_token * T
         flops_per_iter = flops_per_fwdbwd * fwdbwd_per_iter
