@@ -30,7 +30,7 @@ from torch.distributed import init_process_group, destroy_process_group
 from torch.utils.data import DataLoader
 import argparse
 import ipdb
-from transformers import LlamaTokenizer, set_seed
+from transformers import LlamaTokenizer, set_seed, AutoModelForCausalLM
 import logging
 import random
 from glob import glob
@@ -38,7 +38,7 @@ from datasets import Dataset, load_from_disk
 from random import shuffle
 import sys
 
-from model import BevoConfig, Bevo
+from model import BevoForCausalLMConfig, BevoForCausalLM
 
 # logging.set_verbosity_error()
 logger = logging.getLogger("pytorch")
@@ -68,7 +68,7 @@ def arg_parse():
         '--out_dir',
         type=str,
         default='out/',
-        help="where to model"
+        help="where to store model outputs"
     )
     parser.add_argument(
         '--long_sequence_strat',
@@ -81,6 +81,24 @@ def arg_parse():
         type=int,
         default=128,
         help="Maximum sequence length (in tokens) for input."
+    )
+    parser.add_argument(
+        '--num_hidden_layers',
+        type=int,
+        default=12,
+        help="Number of transformer blocks."
+    )
+    parser.add_argument(
+        '--hidden_size',
+        type=int,
+        default=768,
+        help="Embedding size."
+    )
+    parser.add_argument(
+        '--num_attention_heads',
+        type=int,
+        default=12,
+        help="Number of attention_heads."
     )
     parser.add_argument(
         '--batch_size',
@@ -160,13 +178,12 @@ if __name__=="__main__":
     # -----------------------------------------------------------------------------
     # Hyperparameters for training
     gradient_accumulation_steps = 6 * 6 # used to simulate larger batch sizes
+    
+    # model stuff
     block_size = 1024
-    # model
-    n_layer = 12
-    n_head = 12
-    n_embd = 768
     dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
     bias = False # do we use bias inside LayerNorm and Linear layers?
+    
     # adamw optimizer
     learning_rate = 6e-4 # max learning rate
     max_iters = 100000 # total number of training iterations
@@ -375,15 +392,15 @@ if __name__=="__main__":
     #-------------------------------------------------------------------------------
     # model init
     
-    model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size, bias=bias, vocab_size=None, dropout=dropout) # start with model_args from command line
+    model_args = dict(num_hidden_layers=args.num_hidden_layers, num_attention_heads=args.num_attention_heads, hidden_size=args.hidden_size, block_size=block_size, bias=bias, vocab_size=None, dropout=dropout) # start with model_args from command line
     if args.init_from == 'scratch':
         # init a new model from scratch
         if master_process:
             print("Initializing a new model from scratch")
         # determine the vocab size we'll use for from-scratch training
         model_args['vocab_size'] =  tokenizer.vocab_size
-        model_config = BevoConfig(**model_args)
-        model = Bevo(model_config)
+        config = BevoForCausalLMConfig(**model_args)
+        model = BevoForCausalLM(config)
     elif args.init_from == 'resume':
         if master_process:
             print(f"Resuming training from {args.out_dir}")
@@ -393,21 +410,19 @@ if __name__=="__main__":
         checkpoint_model_args = checkpoint['model_args']
         # force these config attributes to be equal otherwise we can't even resume training
         # the rest of the attributes (e.g. dropout) can stay as desired from command line
-        for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size']:
+        for k in ['num_hidden_layers', 'num_attention_heads', 'hidden_size', 'block_size', 'bias', 'vocab_size']:
             model_args[k] = checkpoint_model_args[k]
         # create the model
-        model_config = BevoConfig(**model_args)
-        model = Bevo(model_config)
-        state_dict = checkpoint['model']
-        # fix the keys of the state dictionary :(
-        # honestly no idea how checkpoints sometimes get this prefix, have to debug more
-        unwanted_prefix = '_orig_mod.'
-        for k,v in list(state_dict.items()):
-            if k.startswith(unwanted_prefix):
-                state_dict[k[len(unwanted_prefix):]] = state_dict.pop(k)
-        model.load_state_dict(state_dict)
+        config = BevoForCausalLMConfig(**model_args)
+        model = BevoForCausalLM(config).from_pretrained(args.out_dir)
         iter_num = checkpoint['iter_num']
         best_val_loss = checkpoint['best_val_loss']
+        
+    # Register the model
+    BevoForCausalLMConfig.register_for_auto_class()
+    BevoForCausalLM.register_for_auto_class('AutoModelForCausalLM')
+    
+    ipdb.set_trace()
     # crop down the model block size if desired, using model surgery
     if block_size < model.config.block_size:
         model.crop_block_size(block_size)
@@ -503,14 +518,14 @@ if __name__=="__main__":
                 best_val_loss = losses['val']
                 if iter_num > 0:
                     checkpoint = {
-                        'model': raw_model.state_dict(),
                         'optimizer': optimizer.state_dict(),
                         'model_args': model_args,
                         'iter_num': iter_num,
                         'best_val_loss': best_val_loss,
-                        'config': model_config,
+                        'config': config,
                     }
                     print(f"saving checkpoint to {args.out_dir}")
+                    raw_model.save_pretrained(args.out_dir)
                     torch.save(checkpoint, os.path.join(args.out_dir, 'ckpt.pt'))
         if iter_num == 0 and args.eval_only:
             break
