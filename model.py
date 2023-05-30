@@ -40,7 +40,8 @@ class CausalSelfAttention(nn.Module):
         # output projection
         self.c_proj = nn.Linear(config.hidden_size, config.hidden_size, bias=config.bias)
         # regularization
-        self.attn_dropout = nn.Dropout(0)
+        self.attn_dropout = nn.Dropout(config.attention_dropout)
+        self.attn_dropout_value = config.attention_dropout
         self.resid_dropout = nn.Dropout(config.dropout)
         self.num_attention_heads = config.num_attention_heads
         self.hidden_size = config.hidden_size
@@ -65,7 +66,7 @@ class CausalSelfAttention(nn.Module):
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         if self.flash:
             # efficient attention using Flash Attention CUDA kernels
-            y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=0 if self.training else 0, is_causal=True)
+            y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.attn_dropout_value if self.training else 0, is_causal=True)
         else:
             # manual implementation of attention
             att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
@@ -119,6 +120,7 @@ class BevoConfig(PretrainedConfig):
         num_attention_heads: int = 12,
         hidden_size: int = 768,
         dropout: float = 0.0,
+        attention_dropout: float = 0.0,
         bias: bool = True, # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
         is_decoder: bool = True,
         **kwargs,
@@ -126,6 +128,7 @@ class BevoConfig(PretrainedConfig):
     
         self.block_size = block_size
         self.dropout = dropout
+        self.attention_dropout = attention_dropout
         self.bias = bias
         super().__init__(
             vocab_size=vocab_size, 
@@ -149,7 +152,7 @@ class BevoForCausalLM(PreTrainedModel):
             h = nn.ModuleList([Block(config) for _ in range(config.num_hidden_layers)]),
             ln_f = LayerNorm(config.hidden_size, bias=config.bias),
         ))
-        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=True)
+        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
         # with weight tying when using torch.compile() some warnings get generated:
         # "UserWarning: functional_call was passed multiple values for tied weights.
         # This behavior is deprecated and will be an error in future versions"

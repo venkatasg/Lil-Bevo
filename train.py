@@ -19,7 +19,7 @@ import numpy as np
 import torch
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, DistributedSampler
 import argparse
 import ipdb
 from transformers import T5Tokenizer, set_seed, AutoModelForCausalLM, logging as logging_transformers
@@ -64,13 +64,7 @@ def arg_parse():
         help="where to store model outputs"
     )
     parser.add_argument(
-        '--long_sequence_strat',
-        type=str,
-        default='split',
-        help="How to handle long sequences: split or sample and concat"
-    )
-    parser.add_argument(
-        '--seq_length',
+        '--seq_len',
         type=int,
         default=128,
         help="Maximum sequence length (in tokens) for input."
@@ -90,8 +84,8 @@ def arg_parse():
     parser.add_argument(
         '--block_size',
         type=int,
-        default=1024,
-        help="Block size."
+        default=2048,
+        help="Positional encoding block size."
     )
     parser.add_argument(
         '--num_attention_heads',
@@ -105,12 +99,12 @@ def arg_parse():
         default=0.1,
         help="Dropout in MLP layers."
     )
-    # parser.add_argument(
-    #     '--attention_dropout',
-    #     type=float,
-    #     default=0,
-    #     help="Dropout in attention layers."
-    # )
+    parser.add_argument(
+        '--attention_dropout',
+        type=float,
+        default=0,
+        help="Dropout in attention layers."
+    )
     parser.add_argument(
         '--bias',
         type=bool,
@@ -247,14 +241,14 @@ if __name__=="__main__":
     #-------------------------------------------------------------------------------
     # Data loading, tokenization, etc
     
-    def split_sequence_gen(seq_length):
+    def split_sequence_gen(seq_len):
         def split_sequence(batch):
             concatenated_examples = {k: sum(batch[k], []) for k in batch.keys()}
             total_length = len(concatenated_examples[list(batch.keys())[0]])
             # Find what length to add padding
-            remainder = total_length % seq_length
+            remainder = total_length % seq_len
             if remainder != 0:
-                to_add = seq_length - remainder
+                to_add = seq_len - remainder
             elif remainder == 0:
                 to_add = 0
             to_add_input_id = [tokenizer.pad_token_id] * to_add
@@ -265,25 +259,25 @@ if __name__=="__main__":
             for key in concatenated_examples.keys():
                 t = concatenated_examples[key]
                 t1 = [item for sublist in [t, pad_dict[key]] for item in sublist]
-                assert not len(t1) % seq_length
+                assert not len(t1) % seq_len
                 concatenated_examples[key] = t1
             total_length_use = len(concatenated_examples[list(batch.keys())[0]])
             result = {
-                k: [t[i: i + seq_length] for i in range(0, total_length_use, seq_length)]
+                k: [t[i: i + seq_len] for i in range(0, total_length_use, seq_len)]
                 for k, t in concatenated_examples.items()
             }
             
             # Label is -100 if attention mask is 0, otherwise same as input ids
             result["labels"] = result["input_ids"].copy()
             result["labels"] = [
-                [-100 if mask == 0 else token for mask, token in mask_and_tokens] for mask_and_tokens in
+                [tokenizer.eos_token_id if mask == 0 else token for mask, token in mask_and_tokens] for mask_and_tokens in
                 [zip(masks, labels) for masks, labels in zip(result["attention_mask"], result["labels"])]
             ]
             
             # Some checks
-            assert all([len(x) == seq_length for x in result["input_ids"]])
-            assert all([len(x) == seq_length for x in result["attention_mask"]])
-            assert all([len(x) == seq_length for x in result["labels"]])
+            assert all([len(x) == seq_len for x in result["input_ids"]])
+            assert all([len(x) == seq_len for x in result["attention_mask"]])
+            assert all([len(x) == seq_len for x in result["labels"]])
             return result
         return split_sequence
     
@@ -320,17 +314,19 @@ if __name__=="__main__":
         
         # Splits the data into 128 token length sequences with padding
         full_dataset = full_dataset.map(
-            split_sequence_gen(args.seq_length), batched=True, batch_size=1000
+            split_sequence_gen(args.seq_len), 
+            batched=True
         )
         
         full_dataset.set_format("pt", columns=['input_ids', 'attention_mask', 'labels'], output_all_columns=True)
         
+        sampler = DistributedSampler(full_dataset) if ddp else None
         dataloader = DataLoader(full_dataset,
-                batch_size=args.batch_size,
-                pin_memory=True,
-                shuffle=True,
-            )
-        
+            batch_size=args.batch_size,
+            pin_memory=True,
+            shuffle=(sampler is None),
+            sampler=sampler
+        )
         return dataloader
         
     train_path = args.data_dir
@@ -356,7 +352,7 @@ if __name__=="__main__":
     #-------------------------------------------------------------------------------
     # model init
     
-    model_args = dict(num_hidden_layers=args.num_hidden_layers, num_attention_heads=args.num_attention_heads, hidden_size=args.hidden_size, block_size=args.block_size, bias=args.bias, vocab_size=None, dropout=args.dropout) # start with model_args from command line
+    model_args = dict(num_hidden_layers=args.num_hidden_layers, num_attention_heads=args.num_attention_heads, hidden_size=args.hidden_size, block_size=args.block_size, bias=args.bias, vocab_size=None, dropout=args.dropout, attention_dropout=args.attention_dropout) # start with model_args from command line
     if args.init_from == 'scratch':
         # init a new model from scratch
         if master_process:
@@ -415,7 +411,7 @@ if __name__=="__main__":
     # wrap model into DDP container
     if ddp:
         model = DDP(model, device_ids=[ddp_local_rank])
-    
+        
     # helps estimate an arbitrarily accurate loss over either split using many batches
     @torch.no_grad()
     def estimate_loss():
