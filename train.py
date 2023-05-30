@@ -5,23 +5,15 @@ This training script can be run both on a single gpu in debug mode,
 and also in a larger training run with distributed data parallel (ddp).
 
 To run on a single GPU, example:
-$ python train.py --batch_size=32 --compile=False
+$ python train.py
 
 To run with DDP on 4 gpus on 1 node, example:
 $ torchrun --standalone --nproc_per_node=4 train.py
-
-To run with DDP on 4 gpus across 2 nodes, example:
-- Run on the first (master) node with example IP 123.456.123.456:
-$ torchrun --nproc_per_node=8 --nnodes=2 --node_rank=0 --master_addr=123.456.123.456 --master_port=1234 train.py
-- Run on the worker node:
-$ torchrun --nproc_per_node=8 --nnodes=2 --node_rank=1 --master_addr=123.456.123.456 --master_port=1234 train.py
-(If your cluster does not have Infiniband interconnect prepend NCCL_IB_DISABLE=1)
 """
 
 import os
 import time
 import math
-import pickle
 from contextlib import nullcontext
 import numpy as np
 import torch
@@ -30,7 +22,7 @@ from torch.distributed import init_process_group, destroy_process_group
 from torch.utils.data import DataLoader
 import argparse
 import ipdb
-from transformers import LlamaTokenizer, set_seed, AutoModelForCausalLM
+from transformers import T5Tokenizer, set_seed, AutoModelForCausalLM, logging as logging_transformers
 import logging
 import random
 from glob import glob
@@ -38,10 +30,10 @@ from datasets import Dataset, load_from_disk, logging as logging_datasets
 from random import shuffle
 import sys
 
-logging_datasets.disable_progress_bar()
-from model import BevoForCausalLMConfig, BevoForCausalLM
+from model import BevoConfig, BevoForCausalLM
 
-# logging.set_verbosity_error()
+logging_datasets.disable_progress_bar()
+logging_transformers.set_verbosity_error()
 logger = logging.getLogger("pytorch")
 logger.propagate = False
 logger.setLevel(logging.ERROR)
@@ -96,28 +88,40 @@ def arg_parse():
         help="Embedding size."
     )
     parser.add_argument(
+        '--block_size',
+        type=int,
+        default=1024,
+        help="Block size."
+    )
+    parser.add_argument(
         '--num_attention_heads',
         type=int,
         default=12,
         help="Number of attention_heads."
     )
     parser.add_argument(
+        '--dropout',
+        type=float,
+        default=0.1,
+        help="Dropout in MLP layers."
+    )
+    # parser.add_argument(
+    #     '--attention_dropout',
+    #     type=float,
+    #     default=0,
+    #     help="Dropout in attention layers."
+    # )
+    parser.add_argument(
+        '--bias',
+        type=bool,
+        default=True,
+        help="Bias in hidden layers."
+    )
+    parser.add_argument(
         '--batch_size',
         type=int,
         default=12,
         help="Batch size."
-    )
-    parser.add_argument(
-        '--num_workers',
-        type=int,
-        default=0,
-        help="Number of dataloader workers."
-    )
-    parser.add_argument(
-        '--eval_interval',
-        type=int,
-        default=2000,
-        help="How often to run eval while training"
     )
     parser.add_argument(
         '--log_interval',
@@ -128,8 +132,14 @@ def arg_parse():
     parser.add_argument(
         '--eval_iters',
         type=int,
-        default=500,
-        help=""
+        default=200,
+        help="Number of iterations to run eval"
+    )
+    parser.add_argument(
+        '--eval_interval',
+        type=int,
+        default=100,
+        help="how often to run eval"
     )
     parser.add_argument(
         '--eval_only',
@@ -180,11 +190,6 @@ if __name__=="__main__":
     # Hyperparameters for training
     gradient_accumulation_steps = 6 * 6 # used to simulate larger batch sizes
     
-    # model stuff
-    block_size = 1024
-    dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
-    bias = False # do we use bias inside LayerNorm and Linear layers?
-    
     # adamw optimizer
     learning_rate = 6e-4 # max learning rate
     max_iters = 100000 # total number of training iterations
@@ -195,7 +200,6 @@ if __name__=="__main__":
     # learning rate decay settings
     decay_lr = True # whether to decay the learning rate
     warmup_iters = 2000 # how many steps to warm up for
-    lr_decay_iters = 600000 # should be ~= max_iters per Chinchilla
     min_lr = 6e-5 # minimum learning rate, should be ~= learning_rate/10 per Chinchilla
     device = args.device
     # DDP settings
@@ -223,7 +227,7 @@ if __name__=="__main__":
         master_process = True
         seed_offset = 0
         ddp_world_size = 1
-    tokens_per_iter = gradient_accumulation_steps * ddp_world_size * args.batch_size * block_size
+    tokens_per_iter = gradient_accumulation_steps * ddp_world_size * args.batch_size * args.block_size
     # print(f"tokens per iteration will be: {tokens_per_iter:,}")
     
     if master_process:
@@ -243,57 +247,45 @@ if __name__=="__main__":
     #-------------------------------------------------------------------------------
     # Data loading, tokenization, etc
     
-    def sample_sequence_gen(seq_length, eos_token_id):
-        def sample_sequence(line):
-            doc_length = line["input_ids"].shape[0]
-            if doc_length <= seq_length:
-                start = 0
-            else:
-                if random.random() < 1 / 4:
-                    start = 0
-                else:
-                    start = random.randint(0, doc_length - seq_length)
-            input_ids = line["input_ids"][start : start + seq_length]
-            # if input_ids[-1] != eos_token_id:
-            #     input_ids[-1] = eos_token_id
-            return {"input_ids": input_ids}
-        return sample_sequence
-    
     def split_sequence_gen(seq_length):
         def split_sequence(batch):
-            input_ids = batch["input_ids"][0]
-            out = []
-            while len(input_ids) >= (1 + len(out)) * seq_length:
-                out.append(input_ids[len(out) * seq_length : (1 + len(out)) * seq_length])
-            return {"input_ids": out}
-        return split_sequence
-    
-    def concat_multiple_sequence_gen(seq_length, pad_token_id):
-        def concat_multiple_sequence(batch):
-            concat_input_ids = torch.cat([batch['input_ids'][i] for i in range(len(batch['input_ids']))], dim=0)
-            # remove all pad tokens
-            concat_input_ids = concat_input_ids[concat_input_ids!=pad_token_id]
-            length = concat_input_ids.shape[0]
-            chunks = math.ceil(length / seq_length)
-            pad_length = chunks * seq_length - length
-            pad = torch.ones(pad_length, dtype=concat_input_ids.dtype) * pad_token_id
-            # add pad tokens back
-            concat_input_ids = torch.cat([concat_input_ids, pad], dim=0)
-            # then break up into chunks. But how to handle sequence breaks at max length?
-            input_ids = torch.chunk(concat_input_ids, chunks)
-            input_ids = torch.stack(input_ids, dim=0)
-            return {"input_ids": input_ids}
+            concatenated_examples = {k: sum(batch[k], []) for k in batch.keys()}
+            total_length = len(concatenated_examples[list(batch.keys())[0]])
+            # Find what length to add padding
+            remainder = total_length % seq_length
+            if remainder != 0:
+                to_add = seq_length - remainder
+            elif remainder == 0:
+                to_add = 0
+            to_add_input_id = [tokenizer.pad_token_id] * to_add
+            to_add_atten_mask = [0] * to_add
             
-        return concat_multiple_sequence
-    
-    def get_labels_gen(pad_token_id):
-        def get_labels(line):
-            input_ids = line["input_ids"]
-            labels = input_ids.clone()
-            # Shift one token to right to get labels and pad to 128
-            labels = torch.cat([labels[1:], torch.ones(1, dtype=labels.dtype) * pad_token_id])
-            return {"labels": labels}  
-        return get_labels
+            # split at 128 and pad the rest
+            pad_dict = dict(input_ids=to_add_input_id, attention_mask=to_add_atten_mask)
+            for key in concatenated_examples.keys():
+                t = concatenated_examples[key]
+                t1 = [item for sublist in [t, pad_dict[key]] for item in sublist]
+                assert not len(t1) % seq_length
+                concatenated_examples[key] = t1
+            total_length_use = len(concatenated_examples[list(batch.keys())[0]])
+            result = {
+                k: [t[i: i + seq_length] for i in range(0, total_length_use, seq_length)]
+                for k, t in concatenated_examples.items()
+            }
+            
+            # Label is -100 if attention mask is 0, otherwise same as input ids
+            result["labels"] = result["input_ids"].copy()
+            result["labels"] = [
+                [-100 if mask == 0 else token for mask, token in mask_and_tokens] for mask_and_tokens in
+                [zip(masks, labels) for masks, labels in zip(result["attention_mask"], result["labels"])]
+            ]
+            
+            # Some checks
+            assert all([len(x) == seq_length for x in result["input_ids"]])
+            assert all([len(x) == seq_length for x in result["attention_mask"]])
+            assert all([len(x) == seq_length for x in result["labels"]])
+            return result
+        return split_sequence
     
     def load_data(tokenizer, data_path):
         '''
@@ -307,56 +299,35 @@ if __name__=="__main__":
         files = glob(data_path + '*')
         
         # Load the data and make into a datasets object
-        all_data = ''
+        all_lines = []
         for file in files:
             # exclude directories
             if ('.train' in file) or ('.dev' in file) or ('.test' in file):
-                with open(file, 'r') as f:
-                    all_data += f.read()
-                
-        all_data = [{'text': x} for x in all_data.split('\n\n')]
-        shuffle(all_data)
+                with open(file, 'r', encoding="utf-8") as f:
+                    all_lines.extend(f.readlines())
+                    
+        all_data = [{'text': x.strip()} if x.strip() else {'text': ""} for x in all_lines]
         
         # Convert all_data to huggingface datasets object
         full_dataset = Dataset.from_list(all_data)
         full_dataset = full_dataset.map(
             lambda x: tokenizer(
-                x['text'], 
-                padding='max_length', 
-                max_length=args.seq_length, 
-                # return_tensors='pt',
-                truncation='do_not_truncate',
-                return_length=False,
-                return_attention_mask=False
-            )
+                x['text']
+            ),
+            remove_columns=["text"],
+            batched=True
         )
         
-        # full_dataset = full_dataset.map(lambda x: {"input_ids": x["input_ids"][0]})
-        full_dataset = full_dataset.select_columns("input_ids")
+        # Splits the data into 128 token length sequences with padding
+        full_dataset = full_dataset.map(
+            split_sequence_gen(args.seq_length), batched=True, batch_size=1000
+        )
         
-        if args.long_sequence_strat=='split':
-            # This just splits the document into 128 token length sequences
-            full_dataset = full_dataset.map(
-                split_sequence_gen(args.seq_length), batched=True, batch_size=1
-            )
-        elif args.long_sequence_strat=='sample':
-            # This does some fancy sampling from gopher paper and reduces padding
-            full_dataset = full_dataset.map(
-                sample_sequence_gen(args.seq_length, tokenizer.eos_token_id)
-            )
-            full_dataset = full_dataset.map(
-                concat_multiple_sequence_gen(args.seq_length, tokenizer.pad_token_id),
-                batched=True,
-                batch_size=10,
-                drop_last_batch=True,
-            )
-        full_dataset.set_format("pt", columns=["input_ids"], output_all_columns=True)
-        # Get labels: which is just the next token to predict
-        full_dataset = full_dataset.map(get_labels_gen(tokenizer.pad_token_id))
-            
+        full_dataset.set_format("pt", columns=['input_ids', 'attention_mask', 'labels'], output_all_columns=True)
+        
         dataloader = DataLoader(full_dataset,
                 batch_size=args.batch_size,
-                num_workers=args.num_workers,
+                num_workers=2,
                 pin_memory=True
             )
         
@@ -366,11 +337,8 @@ if __name__=="__main__":
     val_path = '/'.join(args.data_dir.split('/')[:-2]) + '/babylm_dev/'
     
     # This needs to point to a directory I think
-    tokenizer = LlamaTokenizer(
-        args.tokenizer_model_path,
-        pad_token="<pad>",
-        add_bos_token=False,
-        add_eos_token=False,
+    tokenizer = T5Tokenizer(
+        args.tokenizer_model_path
     )
         
     train_dataloader = load_data(tokenizer, train_path)
@@ -388,14 +356,14 @@ if __name__=="__main__":
     #-------------------------------------------------------------------------------
     # model init
     
-    model_args = dict(num_hidden_layers=args.num_hidden_layers, num_attention_heads=args.num_attention_heads, hidden_size=args.hidden_size, block_size=block_size, bias=bias, vocab_size=None, dropout=dropout) # start with model_args from command line
+    model_args = dict(num_hidden_layers=args.num_hidden_layers, num_attention_heads=args.num_attention_heads, hidden_size=args.hidden_size, block_size=args.block_size, bias=args.bias, vocab_size=None, dropout=args.dropout) # start with model_args from command line
     if args.init_from == 'scratch':
         # init a new model from scratch
         if master_process:
             print("Initializing a new model from scratch")
         # determine the vocab size we'll use for from-scratch training
         model_args['vocab_size'] =  tokenizer.vocab_size
-        config = BevoForCausalLMConfig(**model_args)
+        config = BevoConfig(**model_args)
         model = BevoForCausalLM(config)
     elif args.init_from == 'resume':
         if master_process:
@@ -409,19 +377,23 @@ if __name__=="__main__":
         for k in ['num_hidden_layers', 'num_attention_heads', 'hidden_size', 'block_size', 'bias', 'vocab_size']:
             model_args[k] = checkpoint_model_args[k]
         # create the model
-        config = BevoForCausalLMConfig(**model_args)
+        config = BevoConfig(**model_args)
         model = BevoForCausalLM(config).from_pretrained(args.out_dir)
         iter_num = checkpoint['iter_num']
         best_val_loss = checkpoint['best_val_loss']
+    
+    # report number of parameters
+    if master_process:
+        print("number of parameters: %.2fM" % (model.get_num_params()/1e6,))
         
     # Register the model
-    BevoForCausalLMConfig.register_for_auto_class()
+    BevoConfig.register_for_auto_class()
     BevoForCausalLM.register_for_auto_class('AutoModelForCausalLM')
     
     # crop down the model block size if desired, using model surgery
-    if block_size < model.config.block_size:
-        model.crop_block_size(block_size)
-        model_args['block_size'] = block_size # so that the checkpoint will have the right value
+    if args.block_size < model.config.block_size:
+        model.crop_block_size(args.block_size)
+        model_args['block_size'] = args.block_size # so that the checkpoint will have the right value
     model.to(device)
 
     # initialize a GradScaler. If enabled=False scaler is a no-op
@@ -455,8 +427,8 @@ if __name__=="__main__":
             for k in range(args.eval_iters):
                 with ctx:
                     batch = next(iter(dataloader))
-                    logits, loss = model(batch['input_ids'].to(device), batch['labels'].to(device))
-                losses[k] = loss.item()
+                    outputs = model(batch['input_ids'].to(device), batch['labels'].to(device))
+                losses[k] = outputs['loss'].item()
             out[split] = losses.mean()
         model.train()
         return out
@@ -485,14 +457,18 @@ if __name__=="__main__":
             name=args.wandb_run_name, 
             config=config
         )
+    
     if master_process:
         print("Setting max iters to total number of batches: ", len(train_dataloader.dataset)//args.batch_size)
         max_iters = len(train_dataloader.dataset)//args.batch_size
+        lr_decay_iters = max_iters
+        
     # Training loop
     t0 = time.time()
     local_iter_num = 0 # number of iterations in the lifetime of this process
     raw_model = model.module if ddp else model # unwrap DDP container if needed
     running_mfu = -1.0
+    
     while True:
         # determine and set the learning rate for this iteration
         lr = get_lr(iter_num) if decay_lr else learning_rate
@@ -522,6 +498,7 @@ if __name__=="__main__":
                     }
                     print(f"saving checkpoint to {args.out_dir}")
                     raw_model.save_pretrained(args.out_dir)
+                    tokenizer.save_pretrained(args.out_dir)
                     torch.save(checkpoint, os.path.join(args.out_dir, 'ckpt.pt'))
         if iter_num == 0 and args.eval_only:
             break
@@ -538,7 +515,8 @@ if __name__=="__main__":
                 # looking at the source of that context manager, it just toggles this variable
                 model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)
             with ctx:
-                logits, loss = model(batch['input_ids'].to(device), batch['labels'].to(device))
+                outputs = model(batch['input_ids'].to(device), batch['labels'].to(device))
+                logits, loss = outputs['logits'], outputs['loss']
                 loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
             # immediately async prefetch next batch while model is doing the forward pass on the GPU
             batch = next(iter(train_dataloader))
@@ -553,7 +531,7 @@ if __name__=="__main__":
         scaler.update()
         # flush the gradients as soon as we can, no need for this memory anymore
         optimizer.zero_grad(set_to_none=True)
-    
+        
         # timing and logging
         t1 = time.time()
         dt = t1 - t0
@@ -568,9 +546,9 @@ if __name__=="__main__":
             print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
         iter_num += 1
         local_iter_num += 1
-    
+        
         # termination conditions
-        if iter_num > max_iters:
+        if iter_num >= max_iters:
             break
     
     if ddp:

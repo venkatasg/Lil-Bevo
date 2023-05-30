@@ -40,7 +40,7 @@ class CausalSelfAttention(nn.Module):
         # output projection
         self.c_proj = nn.Linear(config.hidden_size, config.hidden_size, bias=config.bias)
         # regularization
-        self.attn_dropout = nn.Dropout(config.dropout)
+        self.attn_dropout = nn.Dropout(0)
         self.resid_dropout = nn.Dropout(config.dropout)
         self.num_attention_heads = config.num_attention_heads
         self.hidden_size = config.hidden_size
@@ -65,7 +65,7 @@ class CausalSelfAttention(nn.Module):
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         if self.flash:
             # efficient attention using Flash Attention CUDA kernels
-            y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=True)
+            y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=0 if self.training else 0, is_causal=True)
         else:
             # manual implementation of attention
             att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
@@ -86,7 +86,7 @@ class MLP(nn.Module):
         self.c_fc    = nn.Linear(config.hidden_size, 4 * config.hidden_size, bias=config.bias)
         self.c_proj  = nn.Linear(4 * config.hidden_size, config.hidden_size, bias=config.bias)
         self.dropout = nn.Dropout(config.dropout)
-        self.gelu = nn.GELU(approximate='tanh')
+        self.gelu = nn.GELU()
 
     def forward(self, x):
         x = self.c_fc(x)
@@ -109,7 +109,7 @@ class Block(nn.Module):
         x = x + self.mlp(self.ln_2(x))
         return x
 
-class BevoForCausalLMConfig(PretrainedConfig):
+class BevoConfig(PretrainedConfig):
     
     def __init__(
         self,
@@ -149,7 +149,7 @@ class BevoForCausalLM(PreTrainedModel):
             h = nn.ModuleList([Block(config) for _ in range(config.num_hidden_layers)]),
             ln_f = LayerNorm(config.hidden_size, bias=config.bias),
         ))
-        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=True)
         # with weight tying when using torch.compile() some warnings get generated:
         # "UserWarning: functional_call was passed multiple values for tied weights.
         # This behavior is deprecated and will be an error in future versions"
@@ -162,9 +162,6 @@ class BevoForCausalLM(PreTrainedModel):
         for pn, p in self.named_parameters():
             if pn.endswith('c_proj.weight'):
                 torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.num_hidden_layers))
-
-        # report number of parameters
-        print("number of parameters: %.2fM" % (self.get_num_params()/1e6,))
 
     def get_num_params(self, non_embedding=True):
         """
@@ -199,17 +196,16 @@ class BevoForCausalLM(PreTrainedModel):
         for block in self.transformer.h:
             x = block(x)
         x = self.transformer.ln_f(x)
-
+        
+        logits = self.lm_head(x)
+        
         if targets is not None:
             # if we are given some desired targets also calculate the loss
-            logits = self.lm_head(x)
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
         else:
-            # inference-time mini-optimization: only forward the lm_head on the very last position
-            logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
             loss = None
-
-        return logits, loss
+            
+        return {'logits': logits, 'loss': loss}
 
     def crop_block_size(self, block_size):
         # model surgery to decrease the block size if necessary
@@ -274,7 +270,7 @@ class BevoForCausalLM(PreTrainedModel):
         ]
         # new PyTorch nightly has a new 'fused' option for AdamW that is much faster
         use_fused = (device_type == 'cuda') and ('fused' in inspect.signature(torch.optim.AdamW).parameters)
-        print(f"using fused AdamW: {use_fused}")
+        # print(f"using fused AdamW: {use_fused}")
         extra_args = dict(fused=True) if use_fused else dict()
         optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas, **extra_args)
 
