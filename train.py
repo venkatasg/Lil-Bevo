@@ -327,8 +327,8 @@ if __name__=="__main__":
         
         dataloader = DataLoader(full_dataset,
                 batch_size=args.batch_size,
-                num_workers=2,
-                pin_memory=True
+                pin_memory=True,
+                shuffle=True,
             )
         
         return dataloader
