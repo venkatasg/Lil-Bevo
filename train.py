@@ -124,12 +124,6 @@ def arg_parse():
         help='How often to log metrics'
     )
     parser.add_argument(
-        '--eval_iters',
-        type=int,
-        default=200,
-        help="Number of iterations to run eval"
-    )
-    parser.add_argument(
         '--eval_interval',
         type=int,
         default=100,
@@ -320,12 +314,10 @@ if __name__=="__main__":
         
         full_dataset.set_format("pt", columns=['input_ids', 'attention_mask', 'labels'], output_all_columns=True)
         
-        sampler = DistributedSampler(full_dataset) if ddp else None
         dataloader = DataLoader(full_dataset,
             batch_size=args.batch_size,
             pin_memory=True,
-            shuffle=(sampler is None),
-            sampler=sampler
+            shuffle=True
         )
         return dataloader
         
@@ -377,10 +369,6 @@ if __name__=="__main__":
         model = BevoForCausalLM(config).from_pretrained(args.out_dir)
         iter_num = checkpoint['iter_num']
         best_val_loss = checkpoint['best_val_loss']
-    
-    # report number of parameters
-    if master_process:
-        print("number of parameters: %.2fM" % (model.get_num_params()/1e6,))
         
     # Register the model
     BevoConfig.register_for_auto_class()
@@ -418,9 +406,10 @@ if __name__=="__main__":
         out = {}
         model.eval()
         for split in ['train', 'val']:
+            eval_iters = 100 if split=='train' else len(val_dataloader.dataset)//args.batch_size
             dataloader = train_dataloader if split=='train' else val_dataloader
-            losses = torch.zeros(args.eval_iters)
-            for k in range(args.eval_iters):
+            losses = torch.zeros(eval_iters)
+            for k in range(eval_iters):
                 with ctx:
                     batch = next(iter(dataloader))
                     outputs = model(batch['input_ids'].to(device), batch['labels'].to(device))
@@ -454,10 +443,14 @@ if __name__=="__main__":
             config=config
         )
     
+    # report number of parameters
     if master_process:
-        print("Setting max iters to total number of batches: ", len(train_dataloader.dataset)//args.batch_size)
-        max_iters = len(train_dataloader.dataset)//args.batch_size
-        lr_decay_iters = max_iters
+        print("number of parameters: %.2fM" % (model.get_num_params()/1e6,))
+    
+    max_iters = len(train_dataloader.dataset)//args.batch_size
+    lr_decay_iters = max_iters
+    if master_process:
+        print("Setting max iters to total number of batches: ", max_iters)
         
     # Training loop
     t0 = time.time()
