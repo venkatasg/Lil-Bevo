@@ -40,7 +40,8 @@ class CausalSelfAttention(nn.Module):
         # output projection
         self.c_proj = nn.Linear(config.hidden_size, config.hidden_size, bias=config.bias)
         # regularization
-        self.attn_dropout = nn.Dropout(config.dropout)
+        self.attn_dropout = nn.Dropout(config.attention_dropout)
+        self.attn_dropout_value = config.attention_dropout
         self.resid_dropout = nn.Dropout(config.dropout)
         self.num_attention_heads = config.num_attention_heads
         self.hidden_size = config.hidden_size
@@ -50,8 +51,7 @@ class CausalSelfAttention(nn.Module):
         if not self.flash:
             print("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
             # causal mask to ensure that attention is only applied to the left in the input sequence
-            self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
-                                        .view(1, 1, config.block_size, config.block_size))
+            self.register_buffer("bias", torch.tril(torch.ones(config.seq_len, config.seq_len)).view(1, 1, config.seq_len, config.seq_len))
 
     def forward(self, x):
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (hidden_size)
@@ -65,7 +65,7 @@ class CausalSelfAttention(nn.Module):
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         if self.flash:
             # efficient attention using Flash Attention CUDA kernels
-            y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=True)
+            y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.attn_dropout_value if self.training else 0, is_causal=True)
         else:
             # manual implementation of attention
             att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
@@ -86,7 +86,7 @@ class MLP(nn.Module):
         self.c_fc    = nn.Linear(config.hidden_size, 4 * config.hidden_size, bias=config.bias)
         self.c_proj  = nn.Linear(4 * config.hidden_size, config.hidden_size, bias=config.bias)
         self.dropout = nn.Dropout(config.dropout)
-        self.gelu = nn.GELU(approximate='tanh')
+        self.gelu = nn.GELU()
 
     def forward(self, x):
         x = self.c_fc(x)
@@ -109,23 +109,29 @@ class Block(nn.Module):
         x = x + self.mlp(self.ln_2(x))
         return x
 
-class BevoForCausalLMConfig(PretrainedConfig):
+class BevoConfig(PretrainedConfig):
     
     def __init__(
         self,
-        block_size: int = 1024,
-        vocab_size: int = 32000,
+        max_position_embeddings: int = 128,
+        vocab_size: int = None,
+        seq_len: int = 128,
         num_hidden_layers: int = 12,
         num_attention_heads: int = 12,
         hidden_size: int = 768,
         dropout: float = 0.0,
+        padding_idx: int = 1,
+        attention_dropout: float = 0.0,
         bias: bool = True, # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
         is_decoder: bool = True,
         **kwargs,
     ):
     
-        self.block_size = block_size
+        self.max_position_embeddings = seq_len
+        self.seq_len = seq_len
         self.dropout = dropout
+        self.attention_dropout = attention_dropout
+        self.padding_idx = padding_idx
         self.bias = bias
         super().__init__(
             vocab_size=vocab_size, 
@@ -140,11 +146,11 @@ class BevoForCausalLM(PreTrainedModel):
 
     def __init__(self, config):
         super().__init__(config=config)
-        assert config.block_size is not None
+        assert config.seq_len is not None
         
         self.transformer = nn.ModuleDict(dict(
             wte = nn.Embedding(config.vocab_size, config.hidden_size),
-            wpe = nn.Embedding(config.block_size, config.hidden_size),
+            wpe = nn.Embedding(config.max_position_embeddings, config.hidden_size),
             drop = nn.Dropout(config.dropout),
             h = nn.ModuleList([Block(config) for _ in range(config.num_hidden_layers)]),
             ln_f = LayerNorm(config.hidden_size, bias=config.bias),
@@ -162,9 +168,6 @@ class BevoForCausalLM(PreTrainedModel):
         for pn, p in self.named_parameters():
             if pn.endswith('c_proj.weight'):
                 torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.num_hidden_layers))
-
-        # report number of parameters
-        print("number of parameters: %.2fM" % (self.get_num_params()/1e6,))
 
     def get_num_params(self, non_embedding=True):
         """
@@ -186,10 +189,10 @@ class BevoForCausalLM(PreTrainedModel):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, idx, targets=None):
+    def forward(self, idx, labels=None):
         device = idx.device
         b, t = idx.size()
-        assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
+        assert t <= self.config.seq_len, f"Cannot forward sequence of length {t}, Max seq len is {self.config.seq_len}"
         pos = torch.arange(0, t, dtype=torch.long, device=device).unsqueeze(0) # shape (1, t)
 
         # forward the GPT model itself
@@ -199,28 +202,19 @@ class BevoForCausalLM(PreTrainedModel):
         for block in self.transformer.h:
             x = block(x)
         x = self.transformer.ln_f(x)
-
-        if targets is not None:
-            # if we are given some desired targets also calculate the loss
-            logits = self.lm_head(x)
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+        
+        logits = self.lm_head(x)
+        
+        if labels is not None:
+            # if we are given some desired labels also calculate the loss
+            # Shift so that tokens < n predict n
+            shift_logits = logits[..., :-1, :].contiguous()
+            shift_labels = labels[..., 1:].contiguous()
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), labels.view(-1), ignore_index=2)
         else:
-            # inference-time mini-optimization: only forward the lm_head on the very last position
-            logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
             loss = None
-
-        return logits, loss
-
-    def crop_block_size(self, block_size):
-        # model surgery to decrease the block size if necessary
-        # e.g. we may load the GPT2 pretrained model checkpoint (block size 1024)
-        # but want to use a smaller block size for some smaller, simpler model
-        assert block_size <= self.config.block_size
-        self.config.block_size = block_size
-        self.transformer.wpe.weight = nn.Parameter(self.transformer.wpe.weight[:block_size])
-        for block in self.transformer.h:
-            if hasattr(block.attn, 'bias'):
-                block.attn.bias = block.attn.bias[:,:,:block_size,:block_size]
+            
+        return {'logits': logits, 'loss': loss}
 
     def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
         """
@@ -274,7 +268,7 @@ class BevoForCausalLM(PreTrainedModel):
         ]
         # new PyTorch nightly has a new 'fused' option for AdamW that is much faster
         use_fused = (device_type == 'cuda') and ('fused' in inspect.signature(torch.optim.AdamW).parameters)
-        print(f"using fused AdamW: {use_fused}")
+        # print(f"using fused AdamW: {use_fused}")
         extra_args = dict(fused=True) if use_fused else dict()
         optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas, **extra_args)
 
@@ -286,7 +280,7 @@ class BevoForCausalLM(PreTrainedModel):
         # see PaLM paper Appendix B as ref: https://arxiv.org/abs/2204.02311
         N = self.get_num_params()
         cfg = self.config
-        L, H, Q, T = cfg.num_hidden_layers, cfg.num_attention_heads, cfg.hidden_size//cfg.num_attention_heads, cfg.block_size
+        L, H, Q, T = cfg.num_hidden_layers, cfg.num_attention_heads, cfg.hidden_size//cfg.num_attention_heads, cfg.seq_len
         flops_per_token = 6*N + 12*L*H*Q*T
         flops_per_fwdbwd = flops_per_token * T
         flops_per_iter = flops_per_fwdbwd * fwdbwd_per_iter
@@ -304,8 +298,8 @@ class BevoForCausalLM(PreTrainedModel):
         Most likely you'll want to make sure to be in model.eval() mode of operation for this.
         """
         for _ in range(max_new_tokens):
-            # if the sequence context is growing too long we must crop it at block_size
-            idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
+            # if the sequence context is growing too long we must crop it at seq_len
+            idx_cond = idx if idx.size(1) <= self.config.seq_len else idx[:, -self.config.seq_len:]
             # forward the model to get the logits for the index in the sequence
             logits, _ = self(idx_cond)
             # pluck the logits at the final step and scale by desired temperature

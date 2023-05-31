@@ -28,14 +28,14 @@ Setup evaluation pipeline as [the BabyLM repo instructs](https://github.com/baby
 
 ### Baseline model
 
-Our baseline model is based on [nanoGPT](https://github.com/karpathy/nanoGPT/) by Andrej Karpathy. The model has **97.6M** parameters, so should be comparable to OPT-125M.
+Our baseline model is based on [nanoGPT](https://github.com/karpathy/nanoGPT/) by Andrej Karpathy. The model has **97.76M** parameters, so should be comparable to OPT-125M.
 
 **Strict-small Track**
 
 *BLiMP*
 | Model | Anaphor Agr. | Agr. Structure | Binding | Control/Raising | D-N Agr. | Ellipsis | Filler-Gap | Irregular Forms | Island Effects | NPI Licensing | Quantifiers | S-V Agr. |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| **Baseline** |  |  |  |  |  |  |  |  |  |  |  |  |
+| **Baseline** | 63.91 | 58.54 | 37.64 | 49.18 | 50.42 | 44.92 | 47.85 | 41.22 | 49.07 | 62.25 | 52.32 | 48.56 |
 | OPT-125m | 63.8 | 70.6 | 67.1 | 66.5 | 78.5 | 62 | 63.8 | 67.5 | 48.6 | 46.7 | 59.6 | 56.9 |
 | RoBERTa-base | 81.5 | 67.1 | 67.3 | 67.9 | 90.8 | 76.4 | 63.5 | 87.4 | 39.9 | 55.9 | 70.5 | 65.4 |
 | T5-base | 68.9 | 63.8 | 60.4 | 60.9 | 72.2 | 34.4 | 48.2 | 77.6 | 45.6 | 47.8 | 61.2 | 65.0 |
