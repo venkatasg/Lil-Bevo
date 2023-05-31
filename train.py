@@ -46,7 +46,7 @@ def arg_parse():
     )
     
     parser.add_argument(
-        '--data_dir',
+        '--data',
         type=str,
         required=True, 
         help="point to babyLM 10M or 100M data directory."
@@ -80,12 +80,6 @@ def arg_parse():
         type=int,
         default=768,
         help="Embedding size."
-    )
-    parser.add_argument(
-        '--block_size',
-        type=int,
-        default=2048,
-        help="Positional encoding block size."
     )
     parser.add_argument(
         '--num_attention_heads',
@@ -128,6 +122,12 @@ def arg_parse():
         type=int,
         default=100,
         help="how often to run eval"
+    )
+    parser.add_argument(
+        '--eval_iters',
+        type=int,
+        default=400,
+        help="How many eval iterations to run"
     )
     parser.add_argument(
         '--eval_only',
@@ -176,7 +176,7 @@ if __name__=="__main__":
 
     # -----------------------------------------------------------------------------
     # Hyperparameters for training
-    gradient_accumulation_steps = 6 * 6 # used to simulate larger batch sizes
+    gradient_accumulation_steps = 36 # used to simulate larger batch sizes
     
     # adamw optimizer
     learning_rate = 6e-4 # max learning rate
@@ -215,7 +215,7 @@ if __name__=="__main__":
         master_process = True
         seed_offset = 0
         ddp_world_size = 1
-    tokens_per_iter = gradient_accumulation_steps * ddp_world_size * args.batch_size * args.block_size
+    tokens_per_iter = gradient_accumulation_steps * ddp_world_size * args.batch_size * args.seq_len
     # print(f"tokens per iteration will be: {tokens_per_iter:,}")
     
     if master_process:
@@ -235,45 +235,44 @@ if __name__=="__main__":
     #-------------------------------------------------------------------------------
     # Data loading, tokenization, etc
     
-    def split_sequence_gen(seq_len):
-        def split_sequence(batch):
-            concatenated_examples = {k: sum(batch[k], []) for k in batch.keys()}
-            total_length = len(concatenated_examples[list(batch.keys())[0]])
-            # Find what length to add padding
-            remainder = total_length % seq_len
-            if remainder != 0:
-                to_add = seq_len - remainder
-            elif remainder == 0:
-                to_add = 0
-            to_add_input_id = [tokenizer.pad_token_id] * to_add
-            to_add_atten_mask = [0] * to_add
-            
-            # split at 128 and pad the rest
-            pad_dict = dict(input_ids=to_add_input_id, attention_mask=to_add_atten_mask)
-            for key in concatenated_examples.keys():
-                t = concatenated_examples[key]
-                t1 = [item for sublist in [t, pad_dict[key]] for item in sublist]
-                assert not len(t1) % seq_len
-                concatenated_examples[key] = t1
-            total_length_use = len(concatenated_examples[list(batch.keys())[0]])
-            result = {
-                k: [t[i: i + seq_len] for i in range(0, total_length_use, seq_len)]
-                for k, t in concatenated_examples.items()
-            }
-            
-            # Label is -100 if attention mask is 0, otherwise same as input ids
-            result["labels"] = result["input_ids"].copy()
-            result["labels"] = [
-                [tokenizer.eos_token_id if mask == 0 else token for mask, token in mask_and_tokens] for mask_and_tokens in
-                [zip(masks, labels) for masks, labels in zip(result["attention_mask"], result["labels"])]
-            ]
-            
-            # Some checks
-            assert all([len(x) == seq_len for x in result["input_ids"]])
-            assert all([len(x) == seq_len for x in result["attention_mask"]])
-            assert all([len(x) == seq_len for x in result["labels"]])
-            return result
-        return split_sequence
+    def tokenize_and_split_seq(raw_text, seq_len):
+        batch = tokenizer(raw_text['text'])
+        concatenated_examples = {k: sum(batch[k], []) for k in batch.keys()}
+        total_length = len(concatenated_examples[list(batch.keys())[0]])
+        # Find what length to add padding
+        remainder = total_length % seq_len
+        if remainder != 0:
+            to_add = seq_len - remainder
+        elif remainder == 0:
+            to_add = 0
+        to_add_input_id = [tokenizer.pad_token_id] * to_add
+        to_add_atten_mask = [0] * to_add
+        
+        # split at 128 and pad the rest
+        pad_dict = dict(input_ids=to_add_input_id, attention_mask=to_add_atten_mask)
+        for key in concatenated_examples.keys():
+            t = concatenated_examples[key]
+            t1 = [item for sublist in [t, pad_dict[key]] for item in sublist]
+            assert not len(t1) % seq_len
+            concatenated_examples[key] = t1
+        total_length_use = len(concatenated_examples[list(batch.keys())[0]])
+        result = {
+            k: [t[i: i + seq_len] for i in range(0, total_length_use, seq_len)]
+            for k, t in concatenated_examples.items()
+        }
+        
+        # Label is -100 if attention mask is 0, otherwise same as input ids
+        result["labels"] = result["input_ids"].copy()
+        result["labels"] = [
+            [tokenizer.eos_token_id if mask == 0 else token for mask, token in mask_and_tokens] for mask_and_tokens in
+            [zip(masks, labels) for masks, labels in zip(result["attention_mask"], result["labels"])]
+        ]
+        
+        # Some checks
+        assert all([len(x) == seq_len for x in result["input_ids"]])
+        assert all([len(x) == seq_len for x in result["attention_mask"]])
+        assert all([len(x) == seq_len for x in result["labels"]])
+        return result
     
     def load_data(tokenizer, data_path):
         '''
@@ -282,7 +281,6 @@ if __name__=="__main__":
         RETURNS
         pyTorch Dataloader
         '''
-        
         # Load the text, and split into array of strings
         files = glob(data_path + '*')
         
@@ -298,18 +296,11 @@ if __name__=="__main__":
         
         # Convert all_data to huggingface datasets object
         full_dataset = Dataset.from_list(all_data)
+        # Tokenize and splits the data into seq_len token length sequences with padding
         full_dataset = full_dataset.map(
-            lambda x: tokenizer(
-                x['text']
-            ),
+            lambda x: tokenize_and_split_seq(x, args.seq_len), 
             remove_columns=["text"],
-            batched=True
-        )
-        
-        # Splits the data into 128 token length sequences with padding
-        full_dataset = full_dataset.map(
-            split_sequence_gen(args.seq_len), 
-            batched=True
+            batched=True,
         )
         
         full_dataset.set_format("pt", columns=['input_ids', 'attention_mask', 'labels'], output_all_columns=True)
@@ -321,21 +312,14 @@ if __name__=="__main__":
         )
         return dataloader
         
-    train_path = args.data_dir
-    val_path = '/'.join(args.data_dir.split('/')[:-2]) + '/babylm_dev/'
-    
     # This needs to point to a directory I think
-    tokenizer = T5Tokenizer(
-        args.tokenizer_model_path
-    )
+    tokenizer = T5Tokenizer(args.tokenizer_model_path)
+    
+    train_path = args.data
+    val_path = '/'.join(args.data.split('/')[:-2]) + '/babylm_dev/'
         
     train_dataloader = load_data(tokenizer, train_path)
-    if master_process:
-        print("Loaded training data")
-    
     val_dataloader = load_data(tokenizer, val_path)
-    if master_process:
-        print("Loaded validation data")
     
     # init these up here, can override if init_from='resume' (i.e. from a checkpoint)
     iter_num = 0
@@ -344,7 +328,7 @@ if __name__=="__main__":
     #-------------------------------------------------------------------------------
     # model init
     
-    model_args = dict(num_hidden_layers=args.num_hidden_layers, num_attention_heads=args.num_attention_heads, hidden_size=args.hidden_size, block_size=args.block_size, bias=args.bias, vocab_size=None, dropout=args.dropout, attention_dropout=args.attention_dropout) # start with model_args from command line
+    model_args = dict(num_hidden_layers=args.num_hidden_layers, num_attention_heads=args.num_attention_heads, hidden_size=args.hidden_size, bias=args.bias, vocab_size=None, seq_len=args.seq_len, dropout=args.dropout, attention_dropout=args.attention_dropout) # start with model_args from command line
     if args.init_from == 'scratch':
         # init a new model from scratch
         if master_process:
@@ -362,7 +346,7 @@ if __name__=="__main__":
         checkpoint_model_args = checkpoint['model_args']
         # force these config attributes to be equal otherwise we can't even resume training
         # the rest of the attributes (e.g. dropout) can stay as desired from command line
-        for k in ['num_hidden_layers', 'num_attention_heads', 'hidden_size', 'block_size', 'bias', 'vocab_size']:
+        for k in ['num_hidden_layers', 'num_attention_heads', 'hidden_size', 'seq_len', 'bias', 'vocab_size']:
             model_args[k] = checkpoint_model_args[k]
         # create the model
         config = BevoConfig(**model_args)
@@ -374,10 +358,6 @@ if __name__=="__main__":
     BevoConfig.register_for_auto_class()
     BevoForCausalLM.register_for_auto_class('AutoModelForCausalLM')
     
-    # crop down the model block size if desired, using model surgery
-    if args.block_size < model.config.block_size:
-        model.crop_block_size(args.block_size)
-        model_args['block_size'] = args.block_size # so that the checkpoint will have the right value
     model.to(device)
 
     # initialize a GradScaler. If enabled=False scaler is a no-op
@@ -406,10 +386,9 @@ if __name__=="__main__":
         out = {}
         model.eval()
         for split in ['train', 'val']:
-            eval_iters = 100 if split=='train' else len(val_dataloader.dataset)//args.batch_size
             dataloader = train_dataloader if split=='train' else val_dataloader
-            losses = torch.zeros(eval_iters)
-            for k in range(eval_iters):
+            losses = torch.zeros(args.eval_iters)
+            for k in range(args.eval_iters):
                 with ctx:
                     batch = next(iter(dataloader))
                     outputs = model(batch['input_ids'].to(device), batch['labels'].to(device))
@@ -442,15 +421,13 @@ if __name__=="__main__":
             name=args.wandb_run_name, 
             config=config
         )
-    
-    # report number of parameters
-    if master_process:
-        print("number of parameters: %.2fM" % (model.get_num_params()/1e6,))
-    
-    max_iters = len(train_dataloader.dataset)//args.batch_size
+        
+    max_iters = len(train_dataloader.dataset)//(args.batch_size*torch.cuda.device_count())
     lr_decay_iters = max_iters
+    eval_interval = max_iters//10
     if master_process:
-        print("Setting max iters to total number of batches: ", max_iters)
+        print("number of parameters: %.2fM" % (model.module.get_num_params()/1e6,))
+        print("Number of iters: ", max_iters)
         
     # Training loop
     t0 = time.time()
@@ -464,7 +441,7 @@ if __name__=="__main__":
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
         # evaluate the loss on train/val sets and write checkpoints
-        if iter_num % args.eval_interval == 0 and master_process:
+        if iter_num % eval_interval == 0 and master_process:
             losses = estimate_loss()
             print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
             if args.wandb_log:

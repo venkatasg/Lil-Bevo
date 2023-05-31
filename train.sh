@@ -15,5 +15,4 @@ source miniconda3/etc/profile.d/conda.sh
 conda activate bevo
 cd babylm/
 
-torchrun --standalone --nproc_per_node=3 train.py --data babylm_data/babylm_100M/ --tokenizer_model_path tokenizers/babylm_100m_uni_16k.model --wandb_log --wandb_run_name 100Mtoks_100Mparams_16k_baseline --out_dir 100Mtoks_100Mparams_16k_baseline
-
+torchrun --standalone --nproc_per_node=3 train.py --data babylm_data/babylm_10M/ --tokenizer_model_path tokenizers/babylm_10m_uni_16k.model --wandb_log --wandb_run_name 10Mtoks_100Mparams_16k_baseline_2048 --out_dir 10Mtoks_100Mparams_16k_baseline_2048 --seq_len 2048
