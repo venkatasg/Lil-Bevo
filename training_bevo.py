@@ -448,7 +448,7 @@ if __name__=="__main__":
                 wandb.log({
                     "iter": iter_num,
                     "train/loss": losses['train'],
-                    "val/loss": losses['val'],
+                    "eval/loss": losses['val'],
                     "lr": lr,
                     "mfu": running_mfu*100, # convert to percentage
                 })

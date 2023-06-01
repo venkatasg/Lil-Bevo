@@ -1,7 +1,7 @@
 '''
 Train any decoder style model on babyLM using this script taken from huggingface run_clm.py
 Concatenate all train and dev files into one txt file using `cat *.train > train.txt' and then pass that as the train/dev file to this script.
-This script is the same as run_clm.py except it loads our tokenizer, and changes vocab size of model to match the tokenizer.
+This script is the same as run_clm.py except it loads our tokenizer.
 '''
 
 #!/usr/bin/env python
@@ -429,7 +429,7 @@ def main():
     # on a small vocab and want a smaller embedding size, remove this test.
     # embedding_size = model.get_input_embeddings().weight.shape[0]
     # if len(tokenizer) > embedding_size:
-    model.resize_token_embeddings(len(tokenizer))
+    # model.resize_token_embeddings(len(tokenizer))
     
 
     # Preprocessing the datasets.
