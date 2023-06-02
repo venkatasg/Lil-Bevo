@@ -14,37 +14,66 @@ conda env create -f environment.yml
 
 This will create an environment called `bevo` with all required packages. `CUDA` support might need to be configured separately depending on the machine you're running it on.
 
-Alternatively, run the following install commands in order:
+Alternatively, run the following commands in order:
 
 ```
 conda create -n bevo pytorch torchvision torchaudio pytorch-cuda=11.8 -c pytorch-nightly -c nvidia jupyter pandas numpy matplotlib scikit-learn tqdm
-pip install git+https://github.com/huggingface/transformers
-pip install wandb ipdb datasets sentencepience
+pip install git+https://github.com/huggingface/transformers wandb ipdb datasets sentencepiece evaluate pytest accelerate
+```
+
+## Scripts
+
+`training_bevo.py` and `modeling_bevo.py` still have bugs in them.
+
+`training_decoder.py` takes as argument any decoder style LM on the Huggingface Hub, and trains the model on babyLM data. First, concatenate all the train and dev files into one text file to pass as input to this script (`cat babylm_data/babylm_10M/*.train > train.txt`). Set the `WANDB_PROJECT` environment variable to **lil-bevo** and run.
+
+```
+export WANDB_PROJECT="lil-bevo"
+python training_decoder.py --config_name facebook/opt-125m --tokenizer_name tokenizers/babylm_10m_uni_16k.model --train_file babylm_data/babylm_10M/train.txt --validation_file babylm_data/babylm_dev/dev.txt --per_device_train_batch_size 8 --per_device_eval_batch_size 8 --do_train --num_train_epochs 10 --do_eval --logging_steps 0.02 --logging_first_step True --eval_steps 0.1 --max_eval_samples 5000 --save_steps 1 --evaluation_strategy steps --output_dir opt-125m-16k-10epochs --report_to wandb --run_name opt-125m-16k-10epochs --overwrite_output_dir 
 ```
 
 ## Evaluation
 
-Setup evaluation pipeline as [the BabyLM repo instructs](https://github.com/babylm/evaluation-pipeline)
+To setup evaluation pipeline as [the BabyLM repo instructs](https://github.com/babylm/evaluation-pipeline), but in a separate conda environment:
 
-### Baseline model
+```
+git clone https://github.com/babylm/evaluation-pipeline
+cd evaluation-pipeline
+conda create -n babyeval python==3.9 pip git-lfs
+pip install --no-build-isolation -e ".[dev]"
+pip install torch==1.11.0+cu113 torchvision==0.12.0+cu113 torchaudio==0.11.0 --extra-index-url https://download.pytorch.org/whl/cu113 sentencepiece
 
-Our baseline model is based on [nanoGPT](https://github.com/karpathy/nanoGPT/) by Andrej Karpathy. The model has **97.76M** parameters, so should be comparable to OPT-125M.
+```
 
-**Strict-small Track**
+Before running the benchmark, comment out line 163 in file 'lm_eval/models/huggingface.py'. I believe this is a bug in their code.
+
+To run the BLiMP benchmark:
+
+```
+python babylm_eval.py PATH_TO_SAVED_MODEL 'decoder' --trust_remote_code
+```
+
+## Baseline Models
+
+Our baseline Bevo model is based on [nanoGPT](https://github.com/karpathy/nanoGPT/) by Andrej Karpathy. The model has **97.76M** parameters, so should be comparable to OPT-125M. We also retrained OPT with the babyLM vocab.
+
+**Strict-small Track: 10M tokens**
 
 *BLiMP*
 | Model | Anaphor Agr. | Agr. Structure | Binding | Control/Raising | D-N Agr. | Ellipsis | Filler-Gap | Irregular Forms | Island Effects | NPI Licensing | Quantifiers | S-V Agr. |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| **Baseline** | 63.91 | 58.54 | 37.64 | 49.18 | 50.42 | 44.92 | 47.85 | 41.22 | 49.07 | 62.25 | 52.32 | 48.56 |
+| **bevo-16k-1epoch** | 63.9 | 58.5 | 37.6 | 49.2 | 50.4 | 44.9 | 47.8 | 41.2 | 49.0 | 62.2 | 52.3 | 48.6 |
+| **OPT-125m-16k-10epochs** | 70.7 | 61.4 | 60.1 | 59.8 | 59.6 | 31.6 | 63.4 | 79.6 | 41.4 | 42.3 | 57.5 | 49.3 |
 | OPT-125m | 63.8 | 70.6 | 67.1 | 66.5 | 78.5 | 62 | 63.8 | 67.5 | 48.6 | 46.7 | 59.6 | 56.9 |
 | RoBERTa-base | 81.5 | 67.1 | 67.3 | 67.9 | 90.8 | 76.4 | 63.5 | 87.4 | 39.9 | 55.9 | 70.5 | 65.4 |
 | T5-base | 68.9 | 63.8 | 60.4 | 60.9 | 72.2 | 34.4 | 48.2 | 77.6 | 45.6 | 47.8 | 61.2 | 65.0 |
 
-*(Super)GLUE*
-| Model | CoLA | SST-2 | MRPC (F1) | QQP (F1) | MNLI | MNLI-mm | QNLI | RTE | BoolQ | MultiRC | WSC |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| **Baseline** |  |  |  |  |  |  |  |  |  |  |  |  |
-| *Majority label* | *69.5* | *50.2* | *82* | *53.1* | *35.7* | *35.7* | *35.4* | *53.1* | *50.5* | *59.9* | *53.2* | *61.4* |
-| OPT-125m | 64.6 | 81.9 | 72.5 | 60.4 | 57.6 | 60.0 | 61.5 | 60.0 | 63.3 | 55.2 | 60.2 |
-| RoBERTa-base | 70.8 | 87.0 | 79.2 | 73.7 | 73.2 | 74.0 | 77.0 | 61.6 | 66.3 | 61.4 | 61.4 |
-| T5-base | 61.2 | 78.1 | 80.5 | 66.2 | 48.0 | 50.3 | 62.0 | 49.4 | 66.0 | 47.1 | 61.4 |
+**Strict Track: 100M tokens**
+
+*BLiMP*
+| Model | Anaphor Agr. | Agr. Structure | Binding | Control/Raising | D-N Agr. | Ellipsis | Filler-Gap | Irregular Forms | Island Effects | NPI Licensing | Quantifiers | S-V Agr. |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| **OPT-125m-16k-7epochs** | 94.9 | 73.9 | 73.4 | 67.4 | 88.7 | 73.1 | 68.1 | 90.1 | 57.4 | 57.8 | 72.1 | 73.7 |
+| OPT-125m | 94.9 | 73.8 | 73.8 | 72.2 | 93.1 | 80.5 | 73.6 | 80.8 | 57.8 | 51.6 | 74.5 | 77.3 |
+| RoBERTa-base | 89.5 | 71.3 | 71 | 67.1 | 93.1 | 83.8 | 68.0 | 89.6 | 54.5 | 66.3 | 70.3 | 76.2 |
+| T5-base | 66.7 | 61.2 | 59.4 | 59.8 | 53.8 | 49.1 | 70.0 | 75.5 | 43.6 | 45.6 | 34.2 | 53.2 |
