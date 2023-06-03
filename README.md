@@ -43,7 +43,7 @@ git clone https://github.com/babylm/evaluation-pipeline
 cd evaluation-pipeline
 conda create -n babyeval python==3.9 pip git-lfs
 pip install --no-build-isolation -e ".[dev]"
-pip install torch==1.11.0+cu113 torchvision==0.12.0+cu113 torchaudio==0.11.0 --extra-index-url https://download.pytorch.org/whl/cu113 sentencepiece
+pip install torch==1.11.0+cu113 torchvision==0.12.0+cu113 torchaudio==0.11.0 --extra-index-url https://download.pytorch.org/whl/cu113 sentencepiece protobuf==3.20.* ipdb
 
 ```
 
@@ -65,7 +65,7 @@ Our baseline Bevo model is based on [nanoGPT](https://github.com/karpathy/nanoGP
 | Model | Anaphor Agr. | Agr. Structure | Binding | Control/Raising | D-N Agr. | Ellipsis | Filler-Gap | Irregular Forms | Island Effects | NPI Licensing | Quantifiers | S-V Agr. |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | **bevo-16k-1epoch** | 63.9 | 58.5 | 37.6 | 49.2 | 50.4 | 44.9 | 47.8 | 41.2 | 49.0 | 62.2 | 52.3 | 48.6 |
-| **DeBERTa-base-16k-10epochs** | 70.7 | 61.4 | 60.1 | 59.8 | 59.6 | 31.6 | 63.4 | 79.6 | 41.4 | 42.3 | 57.5 | 49.3 |
+| **DeBERTaV3-small-16k-10epochs** | 70.7 | 61.4 | 60.1 | 59.8 | 59.6 | 31.6 | 63.4 | 79.6 | 41.4 | 42.3 | 57.5 | 49.3 |
 | **OPT-125m-16k-10epochs** | 70.7 | 61.4 | 60.1 | 59.8 | 59.6 | 31.6 | 63.4 | 79.6 | 41.4 | 42.3 | 57.5 | 49.3 |
 | OPT-125m | 63.8 | 70.6 | 67.1 | 66.5 | 78.5 | 62 | 63.8 | 67.5 | 48.6 | 46.7 | 59.6 | 56.9 |
 | RoBERTa-base | 81.5 | 67.1 | 67.3 | 67.9 | 90.8 | 76.4 | 63.5 | 87.4 | 39.9 | 55.9 | 70.5 | 65.4 |
@@ -76,7 +76,7 @@ Our baseline Bevo model is based on [nanoGPT](https://github.com/karpathy/nanoGP
 *BLiMP*
 | Model | Anaphor Agr. | Agr. Structure | Binding | Control/Raising | D-N Agr. | Ellipsis | Filler-Gap | Irregular Forms | Island Effects | NPI Licensing | Quantifiers | S-V Agr. |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| **OPT-125m-16k-7epochs** | 94.9 | 73.9 | 73.4 | 67.4 | 88.7 | 73.1 | 68.1 | 90.1 | 57.4 | 57.8 | 72.1 | 73.7 |
+| **OPT-125m-16k-10epochs** | 94.9 | 73.9 | 73.4 | 67.4 | 88.7 | 73.1 | 68.1 | 90.1 | 57.4 | 57.8 | 72.1 | 73.7 |
 | OPT-125m | 94.9 | 73.8 | 73.8 | 72.2 | 93.1 | 80.5 | 73.6 | 80.8 | 57.8 | 51.6 | 74.5 | 77.3 |
 | RoBERTa-base | 89.5 | 71.3 | 71 | 67.1 | 93.1 | 83.8 | 68.0 | 89.6 | 54.5 | 66.3 | 70.3 | 76.2 |
 | T5-base | 66.7 | 61.2 | 59.4 | 59.8 | 53.8 | 49.1 | 70.0 | 75.5 | 43.6 | 45.6 | 34.2 | 53.2 |
