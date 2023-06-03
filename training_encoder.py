@@ -389,8 +389,9 @@ def main():
             logger.info(f"New config: {config}")
 
     # Load our custom tokenizer
-    tokenizer = T5Tokenizer(model_args.tokenizer_name)
-
+    tokenizer = T5Tokenizer(model_args.tokenizer_name, mlm=True)
+    tokenizer.mask_token = '<mask>'
+    
     if model_args.model_name_or_path:
         model = AutoModelForMaskedLM.from_pretrained(
             model_args.model_name_or_path,
