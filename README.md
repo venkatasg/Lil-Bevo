@@ -32,6 +32,8 @@ export WANDB_PROJECT="lil-bevo"
 python training_decoder.py --config_name facebook/opt-125m --tokenizer_name tokenizers/babylm_10m_uni_16k.model --train_file babylm_data/babylm_10M/train.txt --validation_file babylm_data/babylm_dev/dev.txt --per_device_train_batch_size 8 --per_device_eval_batch_size 8 --do_train --num_train_epochs 10 --do_eval --logging_steps 0.02 --logging_first_step True --eval_steps 0.1 --max_eval_samples 5000 --save_steps 1 --evaluation_strategy steps --output_dir opt-125m-16k-10epochs --report_to wandb --run_name opt-125m-16k-10epochs --overwrite_output_dir 
 ```
 
+`training_encoder.py` is the same --- it takes as argument any encoder style LM from the Huggingface hub.
+
 ## Evaluation
 
 To setup evaluation pipeline as [the BabyLM repo instructs](https://github.com/babylm/evaluation-pipeline), but in a separate conda environment:
@@ -63,6 +65,7 @@ Our baseline Bevo model is based on [nanoGPT](https://github.com/karpathy/nanoGP
 | Model | Anaphor Agr. | Agr. Structure | Binding | Control/Raising | D-N Agr. | Ellipsis | Filler-Gap | Irregular Forms | Island Effects | NPI Licensing | Quantifiers | S-V Agr. |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | **bevo-16k-1epoch** | 63.9 | 58.5 | 37.6 | 49.2 | 50.4 | 44.9 | 47.8 | 41.2 | 49.0 | 62.2 | 52.3 | 48.6 |
+| **DeBERTa-base-16k-10epochs** | 70.7 | 61.4 | 60.1 | 59.8 | 59.6 | 31.6 | 63.4 | 79.6 | 41.4 | 42.3 | 57.5 | 49.3 |
 | **OPT-125m-16k-10epochs** | 70.7 | 61.4 | 60.1 | 59.8 | 59.6 | 31.6 | 63.4 | 79.6 | 41.4 | 42.3 | 57.5 | 49.3 |
 | OPT-125m | 63.8 | 70.6 | 67.1 | 66.5 | 78.5 | 62 | 63.8 | 67.5 | 48.6 | 46.7 | 59.6 | 56.9 |
 | RoBERTa-base | 81.5 | 67.1 | 67.3 | 67.9 | 90.8 | 76.4 | 63.5 | 87.4 | 39.9 | 55.9 | 70.5 | 65.4 |
