@@ -16,5 +16,6 @@ if __name__ == "__main__":
         model_prefix=args.output_prefix,
         vocab_size=args.vocab_size,
         split_digits=args.split_digits,
-        byte_fallback=args.byte_fallback
+        byte_fallback=args.byte_fallback,
+        max_sentence_length=1000000
     )

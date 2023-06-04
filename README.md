@@ -18,7 +18,7 @@ Alternatively, run the following commands in order:
 
 ```
 conda create -n bevo pytorch torchvision torchaudio pytorch-cuda=11.8 -c pytorch-nightly -c nvidia jupyter pandas numpy matplotlib scikit-learn tqdm
-pip install git+https://github.com/huggingface/transformers wandb ipdb datasets sentencepiece evaluate pytest accelerate
+pip install git+https://github.com/huggingface/transformers wandb ipdb datasets sentencepiece evaluate pytest accelerate mido
 ```
 
 ## Scripts
@@ -80,3 +80,24 @@ Our baseline Bevo model is based on [nanoGPT](https://github.com/karpathy/nanoGP
 | OPT-125m | 94.9 | 73.8 | 73.8 | 72.2 | 93.1 | 80.5 | 73.6 | 80.8 | 57.8 | 51.6 | 74.5 | 77.3 |
 | RoBERTa-base | 89.5 | 71.3 | 71 | 67.1 | 93.1 | 83.8 | 68.0 | 89.6 | 54.5 | 66.3 | 70.3 | 76.2 |
 | T5-base | 66.7 | 61.2 | 59.4 | 59.8 | 53.8 | 49.1 | 70.0 | 75.5 | 43.6 | 45.6 | 34.2 | 53.2 |
+
+
+## Music
+
+### MAESTRO
+
+We attempted pretraining with the [MAESTRO]() dataset, in addition to the 10M tokens in the training data, to see if hierarchical information in music might help. Convert all the midi files into one big text file (split every 1000 spaces) using `midi_to_text.py`. Then train a tokenizer on the combined file:
+
+```
+python midi/midi_to_text.py babylm_data/maestro/*/*.midi > sed 's/ /\n/1000; P; D' > babylm_data/maestro/midi.txt
+ cat babylm_data/babylm_10M/all.txt babylm_data/maestro/midi.txt
+ > babylm_data/maestro/all.txt
+```
+ 
+**Strict-small Track: 10M tokens**
+
+*BLiMP*
+| Model | Anaphor Agr. | Agr. Structure | Binding | Control/Raising | D-N Agr. | Ellipsis | Filler-Gap | Irregular Forms | Island Effects | NPI Licensing | Quantifiers | S-V Agr. |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| **OPT-maestro** | 71.3 | 64.9 | 61.9 | 60.8 | 75.4 | 46.6 | 64.9 | 83.9 | 42.6 | 37.7 | 70.4 | 56.6 |
+| **OPT-125m-16k-10epochs** | 70.7 | 61.4 | 60.1 | 59.8 | 59.6 | 31.6 | 63.4 | 79.6 | 41.4 | 42.3 | 57.5 | 49.3 |
