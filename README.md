@@ -42,6 +42,7 @@ To setup evaluation pipeline as [the BabyLM repo instructs](https://github.com/b
 git clone https://github.com/babylm/evaluation-pipeline
 cd evaluation-pipeline
 conda create -n babyeval python==3.9 pip git-lfs
+conda activate babyeval
 pip install --no-build-isolation -e ".[dev]"
 pip install torch==1.11.0+cu113 torchvision==0.12.0+cu113 torchaudio==0.11.0 --extra-index-url https://download.pytorch.org/whl/cu113 sentencepiece
 
@@ -93,11 +94,14 @@ python midi/midi_to_text.py babylm_data/maestro/*/*.midi > sed 's/ /\n/1000; P; 
  cat babylm_data/babylm_10M/all.txt babylm_data/maestro/midi.txt
  > babylm_data/maestro/all.txt
 ```
- 
+
+The following results are for a tokenizer trained on the 10M tokens + MAESTRO, with similar pretraining paradigm in all 3 cases.
+
 **Strict-small Track: 10M tokens**
 
 *BLiMP*
 | Model | Anaphor Agr. | Agr. Structure | Binding | Control/Raising | D-N Agr. | Ellipsis | Filler-Gap | Irregular Forms | Island Effects | NPI Licensing | Quantifiers | S-V Agr. |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| **OPT** | 68.4 | 62.3| 62.8| 58.4| 61.0| 27.1| 64.8| 81.0| 46.1| 44.6| 55.4| 47.6 |
 | **OPT-maestro** | 71.3 | 64.9 | 61.9 | 60.8 | 75.4 | 46.6 | 64.9 | 83.9 | 42.6 | 37.7 | 70.4 | 56.6 |
-| **OPT-125m-16k-10epochs** | 70.7 | 61.4 | 60.1 | 59.8 | 59.6 | 31.6 | 63.4 | 79.6 | 41.4 | 42.3 | 57.5 | 49.3 |
+| **OPT-random-music** | 79.7 | 66.9 | 66.3 | 62.2 | 78.5 | 51.2 | 64.2 | 84.8 | 44.3 | 53.8 | 70.5 | 59.5 |
