@@ -6,3 +6,4 @@ out/
 *.zip
 evaluation-pipeline/
 opt/
+baseline-pretraining-main/
