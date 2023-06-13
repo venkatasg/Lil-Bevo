@@ -58,28 +58,17 @@ python babylm_eval.py PATH_TO_SAVED_MODEL 'decoder' --trust_remote_code
 
 ## Baseline Models
 
-Our baseline Bevo model is based on [nanoGPT](https://github.com/karpathy/nanoGPT/) by Andrej Karpathy. The model has **97.76M** parameters, so should be comparable to OPT-125M. We also retrained OPT with the babyLM vocab.
+Models in bold are ones that we trained and got results.
 
 **Strict-small Track: 10M tokens**
 
 *BLiMP*
 | Model | Anaphor Agr. | Agr. Structure | Binding | Control/Raising | D-N Agr. | Ellipsis | Filler-Gap | Irregular Forms | Island Effects | NPI Licensing | Quantifiers | S-V Agr. |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| **bevo-16k-1epoch** | 63.9 | 58.5 | 37.6 | 49.2 | 50.4 | 44.9 | 47.8 | 41.2 | 49.0 | 62.2 | 52.3 | 48.6 |
-| **DeBERTa-base** | 70.7 | 61.4 | 60.1 | 59.8 | 59.6 | 31.6 | 63.4 | 79.6 | 41.4 | 42.3 | 57.5 | 49.3 |
 | **OPT-125m-best** | 87.3 | 67.2 | 67.7 | 63.9 | 84.4 | 56.1 | 64.5 | 88.2 | 45.0 | 51.2 | 74.3 | 64.4 |
 | OPT-125m | 63.8 | 70.6 | 67.1 | 66.5 | 78.5 | 62 | 63.8 | 67.5 | 48.6 | 46.7 | 59.6 | 56.9 |
 | RoBERTa-base | 81.5 | 67.1 | 67.3 | 67.9 | 90.8 | 76.4 | 63.5 | 87.4 | 39.9 | 55.9 | 70.5 | 65.4 |
 | T5-base | 68.9 | 63.8 | 60.4 | 60.9 | 72.2 | 34.4 | 48.2 | 77.6 | 45.6 | 47.8 | 61.2 | 65.0 |
-
-**Strict Track: 100M tokens**
-
-*BLiMP*
-| Model | Anaphor Agr. | Agr. Structure | Binding | Control/Raising | D-N Agr. | Ellipsis | Filler-Gap | Irregular Forms | Island Effects | NPI Licensing | Quantifiers | S-V Agr. |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| OPT-125m | 94.9 | 73.8 | 73.8 | 72.2 | 93.1 | 80.5 | 73.6 | 80.8 | 57.8 | 51.6 | 74.5 | 77.3 |
-| RoBERTa-base | 89.5 | 71.3 | 71 | 67.1 | 93.1 | 83.8 | 68.0 | 89.6 | 54.5 | 66.3 | 70.3 | 76.2 |
-| T5-base | 66.7 | 61.2 | 59.4 | 59.8 | 53.8 | 49.1 | 70.0 | 75.5 | 43.6 | 45.6 | 34.2 | 53.2 |
 
 
 ## Music
@@ -103,3 +92,4 @@ The following results are for a tokenizer trained on the 10M tokens + MAESTRO, w
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | **OPT** | 83.13 | 68.5 | 67.0 | 64.3 | 82.9 | 62.4 | 64.6 | 88.3 | 49.8 | 51.2 | 72.2 | 64.4 |
 | **OPT+maestro** | 83.3 | 68.0 | 66.8 | 64.0 | 83.0 | 60.4 | 65.1 | 87.6 | 50.0 | 53.0 | 69.3 | 63.8 |
+| OPT-125m-babyLM-baseline | 63.8 | 70.6 | 67.1 | 66.5 | 78.5 | 62 | 63.8 | 67.5 | 48.6 | 46.7 | 59.6 | 56.9 |
