@@ -104,7 +104,7 @@ class ModelArguments:
     config_name: Optional[str] = field(
         default=None, metadata={"help": "Pretrained config name or path if not the same as model_name"}
     )
-    tokenizer_name: Optional[str] = field(
+    tokenizer_path: Optional[str] = field(
         default=None, metadata={"help": "Pretrained tokenizer name or path if not the same as model_name"}
     )
     cache_dir: Optional[str] = field(
@@ -401,9 +401,8 @@ def main():
         "revision": model_args.model_revision,
         "use_auth_token": True if model_args.use_auth_token else None,
     }
-
-    # Load our custom tokenizer
-    tokenizer = T5Tokenizer(model_args.tokenizer_name)
+    
+    tokenizer = T5Tokenizer(model_args.tokenizer_path)
 
     if model_args.model_name_or_path:
         torch_dtype = (
@@ -504,6 +503,95 @@ def main():
         }
         result["labels"] = result["input_ids"].copy()
         return result
+        
+    # Padding and stride function
+    # def group_padding_stride(self, examples):
+    #     concatenated_examples = {k: sum(examples[k], []) for k in examples.keys()}
+    #     total_length = len(concatenated_examples[list(examples.keys())[0]])
+    #     # Finds just the quotient of total_length - block_size by stride
+    #     total_length_stride = ((total_length - block_size + stride) // stride) * stride
+    #     # Get the remainder and subtract to get the length of padding to add to fit the last stride
+    #     # Different padding for stride > or < than block_size
+    #     if stride < block_size:
+    #         remainder = (total_length - block_size) % stride
+    #         to_add = block_size - remainder
+    #         to_add_input_id = [padding_tok] * to_add
+    #         to_add_atten_mask = [0] * to_add
+    #         pad_dict = dict(input_ids=to_add_input_id, attention_mask=to_add_atten_mask)
+    #         for key in concatenated_examples.keys():
+    #             t = concatenated_examples[key]
+    #             t1 = [item for sublist in [t, pad_dict[key]] for item in sublist]
+    #             # assert not len(t1) % stride
+    #             concatenated_examples[key] = t1
+    #         total_length_use = total_length_stride + 1
+    #         # New Dict object based that samples at length block_size with stride
+    #         result = {k: [t[i: i + block_size] for i in range(0, total_length_use, stride)] for k, t in
+    #                   concatenated_examples.items()}
+    #     elif stride > block_size:
+    #         count_index = 1
+    #         count_length = total_length - block_size
+    #         while count_length >= stride + block_size:
+    #             count_index += 1
+    #             count_length = count_length - stride - block_size
+    #         to_add = block_size
+    #         to_add_input_id = [padding_tok] * to_add
+    #         to_add_atten_mask = [0] * to_add
+    #         total_length_use = count_index * stride
+    #         pad_dict = dict(input_ids=to_add_input_id, attention_mask=to_add_atten_mask)
+    #         for key in concatenated_examples.keys():
+    #             t = concatenated_examples[key]
+    #             t1 = [item for sublist in [t, pad_dict[key]] for item in sublist]
+    #             # assert not len(t1) % stride
+    #             concatenated_examples[key] = t1
+    # 
+    #         # New Dict object based that samples at length block_size with stride
+    #         result = {k: [t[0:block_size]] for k, t in concatenated_examples.items()}
+    #         result_add = {
+    #             k: [t[i + stride - 1: i + block_size + stride - 1] for i in
+    #                 range(stride, total_length_use, stride)]
+    #             for k, t in concatenated_examples.items()}
+    #         for key in result.keys():
+    #             t = result[key]
+    #             t1 = [item for sublist in [t, result_add[key]] for item in sublist]
+    #             result[key] = t1
+    # 
+    #     # Copies over input ids to new column called labels
+    #     result["labels"] = deepcopy(result["input_ids"])
+    # 
+    #     # Label is -100 if attention mask is 0, otherwise same as input ids
+    #     # Just for padding at the end
+    #     result["labels"] = [
+    #         [-100 if mask == 0 else token for mask, token in mask_and_tokens] for mask_and_tokens in
+    #         [zip(masks, labels) for masks, labels in zip(result["attention_mask"], result["labels"])]
+    #     ]
+    # 
+    #     # Mask out losses in overlapping regions. If training data, string will be equal to block_size
+    #     for i, labels in enumerate(result["labels"]):
+    #         # Skip the first index since the first batch will not have any masking
+    #         if i == 0:
+    #             continue
+    #         # For every j in range from 0 to length-stride, change label to -100 to mask them
+    #         for j in range(block_size - stride):
+    #             labels[j] = -100
+    #         # Set the newly masked list of labels to result Dict object
+    #         result["labels"][i] = labels
+    # 
+    #     for i, attention in enumerate(result["attention_mask"]):
+    #         # Skip the first index since the first batch will not have any masking
+    #         if i == 0:
+    #             continue
+    #         # For every j in range from 0 to length-stride, change attention mask to 0 to mask them
+    #         for j in range(block_size - stride):
+    #             attention[j] = 0
+    #         # Set the newly masked list of labels to result Dict object
+    #         result["attention_mask"][i] = attention
+    # 
+    #     # Some checks
+    #     # assert all([len(x) == block_size for x in result["input_ids"]])
+    #     # assert all([len(x) == block_size for x in result["attention_mask"]])
+    #     # assert all([len(x) == block_size for x in result["labels"]])
+    # 
+    #     return result
 
     # Note that with `batched=True`, this map processes 1,000 texts together, so group_texts throws away a remainder
     # for each of those groups of 1,000 texts. You can adjust that batch_size here but a higher value might be slower
