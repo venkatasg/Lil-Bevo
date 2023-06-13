@@ -1,5 +1,6 @@
 """
-Training script copied from Karpathy's nanoGPT
+Training script modified from Karpathy's nanoGPT:
+    https://github.com/karpathy/nanoGPT/blob/master/train.py
 
 This training script can be run both on a single gpu in debug mode,
 and also in a larger training run with distributed data parallel (ddp).
@@ -30,7 +31,7 @@ from datasets import Dataset, load_from_disk, logging as logging_datasets
 from random import shuffle
 import sys
 
-from model import BevoConfig, BevoForCausalLM
+from modeling_bevo import BevoConfig, BevoForCausalLM
 
 logging_datasets.disable_progress_bar()
 logging_transformers.set_verbosity_error()
@@ -44,17 +45,17 @@ def arg_parse():
     prog='Training script for lil Bevo',
     description='Trains a GPT style decoder model on training data',
     )
-    
+
     parser.add_argument(
         '--data',
         type=str,
-        required=True, 
+        required=True,
         help="point to babyLM 10M or 100M data directory."
     )
     parser.add_argument(
         '--tokenizer_model_path',
         type=str,
-        required=True, 
+        required=True,
         help="point to tokenizer .model file to use"
     )
     parser.add_argument(
@@ -142,13 +143,13 @@ def arg_parse():
     parser.add_argument(
         '--device',
         type=str,
-        default='cuda', 
+        default='cuda',
         help="cpu, cuda, mps"
     )
     parser.add_argument(
         '--init_from',
         type=str,
-        default='scratch', 
+        default='scratch',
         help="scratch or resume"
     )
     parser.add_argument(
@@ -159,7 +160,7 @@ def arg_parse():
     parser.add_argument(
         '--wandb_project',
         type=str,
-        default='lil-bevo', 
+        default='lil-bevo',
         help="Don't change this"
     )
     parser.add_argument(
@@ -168,7 +169,7 @@ def arg_parse():
         help="You must set a run name if wandb_log is passed"
     )
     args = parser.parse_args()
-    
+
     return args
 
 if __name__=="__main__":
@@ -177,7 +178,7 @@ if __name__=="__main__":
     # -----------------------------------------------------------------------------
     # Hyperparameters for training
     gradient_accumulation_steps = 36 # used to simulate larger batch sizes
-    
+
     # adamw optimizer
     learning_rate = 6e-4 # max learning rate
     max_iters = 100000 # total number of training iterations
@@ -193,10 +194,10 @@ if __name__=="__main__":
     # DDP settings
     backend = 'nccl' # 'nccl', 'gloo', etc.
     # system
-    dtype = 'bfloat16' # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
+    dtype = 'float16' #NOTE was 'bfloat16' but did not work with my setup.  'bfloat16' # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
     compile = True if args.device!='mps' else False # use PyTorch 2.0 to compile the model to be faster
     # -----------------------------------------------------------------------------
-    
+
     # various inits, derived attributes, I/O setup
     ddp = int(os.environ.get('RANK', -1)) != -1 # is this a ddp run?
     if ddp:
@@ -217,7 +218,7 @@ if __name__=="__main__":
         ddp_world_size = 1
     tokens_per_iter = gradient_accumulation_steps * ddp_world_size * args.batch_size * args.seq_len
     # print(f"tokens per iteration will be: {tokens_per_iter:,}")
-    
+
     if master_process:
         os.makedirs(args.out_dir, exist_ok=True)
     torch.manual_seed(78727 + seed_offset)
@@ -231,10 +232,10 @@ if __name__=="__main__":
     # note: float16 data type will automatically use a GradScaler
     ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype]
     ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
-    
+
     #-------------------------------------------------------------------------------
     # Data loading, tokenization, etc
-    
+
     def tokenize_and_split_seq(raw_text, seq_len):
         batch = tokenizer(raw_text['text'])
         concatenated_examples = {k: sum(batch[k], []) for k in batch.keys()}
@@ -247,7 +248,7 @@ if __name__=="__main__":
             to_add = 0
         to_add_input_id = [tokenizer.pad_token_id] * to_add
         to_add_atten_mask = [0] * to_add
-        
+
         # split at 128 and pad the rest
         pad_dict = dict(input_ids=to_add_input_id, attention_mask=to_add_atten_mask)
         for key in concatenated_examples.keys():
@@ -260,30 +261,36 @@ if __name__=="__main__":
             k: [t[i: i + seq_len] for i in range(0, total_length_use, seq_len)]
             for k, t in concatenated_examples.items()
         }
-        
+
         # Label is -100 if attention mask is 0, otherwise same as input ids
+        #NOTE actually EOS token is 2, not -100  (when using the uni16k tokenizer)
         result["labels"] = result["input_ids"].copy()
         result["labels"] = [
             [tokenizer.eos_token_id if mask == 0 else token for mask, token in mask_and_tokens] for mask_and_tokens in
             [zip(masks, labels) for masks, labels in zip(result["attention_mask"], result["labels"])]
         ]
-        
+        #NOTE: the following line fixes the abnormal (low) loss issue (together with
+        # removing the shift in `modeling_bevo.py`). But might want to refactor differently
+        # later to maintain flexibility (since this is only for autoregressive LM)
+        #NOTE: not sure if it's best to start with pad token -- I couldn't find a bos token...
+        result["input_ids"] = [  [tokenizer.pad_token_id]+x[:-1] for x in result["labels"]]
+
         # Some checks
         assert all([len(x) == seq_len for x in result["input_ids"]])
         assert all([len(x) == seq_len for x in result["attention_mask"]])
         assert all([len(x) == seq_len for x in result["labels"]])
         return result
-    
+
     def load_data(tokenizer, data_path):
         '''
         This loads the data, tokenizes it and makes a pyTorch dataloader of it
-        
+
         RETURNS
         pyTorch Dataloader
         '''
         # Load the text, and split into array of strings
         files = glob(data_path + '*')
-        
+
         # Load the data and make into a datasets object
         all_lines = []
         for file in files:
@@ -291,43 +298,45 @@ if __name__=="__main__":
             if ('.train' in file) or ('.dev' in file) or ('.test' in file):
                 with open(file, 'r', encoding="utf-8") as f:
                     all_lines.extend(f.readlines())
-                    
+
         all_data = [{'text': x.strip()} if x.strip() else {'text': ""} for x in all_lines]
-        
+
         # Convert all_data to huggingface datasets object
         full_dataset = Dataset.from_list(all_data)
         # Tokenize and splits the data into seq_len token length sequences with padding
         full_dataset = full_dataset.map(
-            lambda x: tokenize_and_split_seq(x, args.seq_len), 
+            lambda x: tokenize_and_split_seq(x, args.seq_len),
             remove_columns=["text"],
             batched=True,
         )
-        
+
         full_dataset.set_format("pt", columns=['input_ids', 'attention_mask', 'labels'], output_all_columns=True)
-        
+
         dataloader = DataLoader(full_dataset,
             batch_size=args.batch_size,
             pin_memory=True,
             shuffle=True
         )
         return dataloader
-        
+
     # This needs to point to a directory I think
     tokenizer = T5Tokenizer(args.tokenizer_model_path)
-    
+
     train_path = args.data
     val_path = '/'.join(args.data.split('/')[:-2]) + '/babylm_dev/'
-        
+
+    print("Loading and tokenizing training data...patience please..")
     train_dataloader = load_data(tokenizer, train_path)
+    print("Loading and tokenizing validation data...patience please..")
     val_dataloader = load_data(tokenizer, val_path)
-    
+
     # init these up here, can override if init_from='resume' (i.e. from a checkpoint)
     iter_num = 0
     best_val_loss = 1e9
-        
+
     #-------------------------------------------------------------------------------
     # model init
-    
+
     model_args = dict(num_hidden_layers=args.num_hidden_layers, num_attention_heads=args.num_attention_heads, hidden_size=args.hidden_size, bias=args.bias, vocab_size=None, seq_len=args.seq_len, dropout=args.dropout, attention_dropout=args.attention_dropout) # start with model_args from command line
     if args.init_from == 'scratch':
         # init a new model from scratch
@@ -353,33 +362,33 @@ if __name__=="__main__":
         model = BevoForCausalLM(config).from_pretrained(args.out_dir)
         iter_num = checkpoint['iter_num']
         best_val_loss = checkpoint['best_val_loss']
-        
+
     # Register the model
     BevoConfig.register_for_auto_class()
     BevoForCausalLM.register_for_auto_class('AutoModelForCausalLM')
-    
+
     model.to(device)
 
     # initialize a GradScaler. If enabled=False scaler is a no-op
     scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
-    
+
     # optimizer
     optimizer = model.configure_optimizers(weight_decay, learning_rate, (beta1, beta2), device_type)
     if args.init_from == 'resume':
         optimizer.load_state_dict(checkpoint['optimizer'])
     checkpoint = None # free up memory
-    
+
     # compile the model
     if compile:
         if master_process:
             print("compiling the model... (takes a ~minute)")
         unoptimized_model = model
         model = torch.compile(model) # requires PyTorch 2.0
-    
+
     # wrap model into DDP container
     if ddp:
         model = DDP(model, device_ids=[ddp_local_rank])
-        
+
     # helps estimate an arbitrarily accurate loss over either split using many batches
     @torch.no_grad()
     def estimate_loss():
@@ -396,7 +405,7 @@ if __name__=="__main__":
             out[split] = losses.mean()
         model.train()
         return out
-    
+
     # learning rate decay scheduler (cosine with warmup)
     def get_lr(it):
         # 1) linear warmup for warmup_iters steps
@@ -410,31 +419,31 @@ if __name__=="__main__":
         assert 0 <= decay_ratio <= 1
         coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff ranges 0..1
         return min_lr + coeff * (learning_rate - min_lr)
-    
+
     # logging
     if args.wandb_log and master_process:
         import wandb
         if args.wandb_run_name is None:
             sys.exit("Pass a meaningful wandb_run_name argument!")
         wandb.init(
-            project=args.wandb_project, 
-            name=args.wandb_run_name, 
+            project=args.wandb_project,
+            name=args.wandb_run_name,
             config=config
         )
-        
+
     max_iters = len(train_dataloader.dataset)//(args.batch_size*torch.cuda.device_count())
     lr_decay_iters = max_iters
-    eval_interval = max_iters//10
+    eval_interval = max_iters//10 #NOTE: wait, it's also defined above -- which one do we want..?
     if master_process:
-        print("number of parameters: %.2fM" % (model.module.get_num_params()/1e6,))
+        print("number of parameters: %.2fM" % (model.get_num_params()/1e6,))
         print("Number of iters: ", max_iters)
-        
+
     # Training loop
     t0 = time.time()
     local_iter_num = 0 # number of iterations in the lifetime of this process
     raw_model = model.module if ddp else model # unwrap DDP container if needed
     running_mfu = -1.0
-    
+
     while True:
         # determine and set the learning rate for this iteration
         lr = get_lr(iter_num) if decay_lr else learning_rate
@@ -468,7 +477,7 @@ if __name__=="__main__":
                     torch.save(checkpoint, os.path.join(args.out_dir, 'ckpt.pt'))
         if iter_num == 0 and args.eval_only:
             break
-            
+
         # Get first batch of training data
         batch = next(iter(train_dataloader))
         # forward backward update, with optional gradient accumulation to simulate larger batch size
@@ -497,7 +506,7 @@ if __name__=="__main__":
         scaler.update()
         # flush the gradients as soon as we can, no need for this memory anymore
         optimizer.zero_grad(set_to_none=True)
-        
+
         # timing and logging
         t1 = time.time()
         dt = t1 - t0
@@ -512,10 +521,10 @@ if __name__=="__main__":
             print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
         iter_num += 1
         local_iter_num += 1
-        
+
         # termination conditions
         if iter_num >= max_iters:
             break
-    
+
     if ddp:
         destroy_process_group()

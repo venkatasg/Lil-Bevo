@@ -23,7 +23,14 @@ pip install git+https://github.com/huggingface/transformers wandb ipdb datasets 
 
 ## Scripts
 
-`training_bevo.py` and `modeling_bevo.py` still have bugs in them.
+`training_bevo.py` and `modeling_bevo.py` are based on `train.py` and `model.py` from Karpathy's nanoGPT (https://github.com/karpathy/nanoGPT/), with mostly the same hyperparameters (except block_size = seq_len is 128 instead of 1024, and bias set to True).
+~~`training_bevo.py` and `modeling_bevo.py` still have bugs in them.~~ (I think the bugs are gone but proceed with caution). 
+
+Example run:
+
+```
+python training_bevo.py --data babylm_data/babylm_10M/ --tokenizer_model_path tokenizers/babylm_100m_uni_16k.model --dropout 0.0 --wandb_run_name some_name_for_run --out_dir name_of_output_dir --wandb_log
+```
 
 `training_decoder.py` takes as argument any decoder style LM on the Huggingface Hub, and trains the model on babyLM data. First, concatenate all the train and dev files into one text file to pass as input to this script (`cat babylm_data/babylm_10M/*.train > train.txt`). Set the `WANDB_PROJECT` environment variable to **lil-bevo** and run.
 
