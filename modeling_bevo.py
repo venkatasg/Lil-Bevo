@@ -147,7 +147,7 @@ class BevoForCausalLM(PreTrainedModel):
     def __init__(self, config):
         super().__init__(config=config)
         assert config.seq_len is not None
-        
+
         self.transformer = nn.ModuleDict(dict(
             wte = nn.Embedding(config.vocab_size, config.hidden_size),
             wpe = nn.Embedding(config.max_position_embeddings, config.hidden_size),
@@ -202,18 +202,20 @@ class BevoForCausalLM(PreTrainedModel):
         for block in self.transformer.h:
             x = block(x)
         x = self.transformer.ln_f(x)
-        
+
         logits = self.lm_head(x)
-        
+
+        #NOTE: see how this is slightly modified... (starting with logits = ... above)
         if labels is not None:
             # if we are given some desired labels also calculate the loss
             # Shift so that tokens < n predict n
-            shift_logits = logits[..., :-1, :].contiguous()
-            shift_labels = labels[..., 1:].contiguous()
+            #NOTE Now shifting the logits in the data & tokenizing preprocess (tokenize_and_split_seq), not here...
+#            shift_logits = logits[..., :-1, :].contiguous()
+#            shift_labels = labels[..., 1:].contiguous()
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), labels.view(-1), ignore_index=2)
         else:
             loss = None
-            
+
         return {'logits': logits, 'loss': loss}
 
     def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
