@@ -37,7 +37,7 @@ from typing import Optional
 
 import datasets
 import evaluate
-from datasets import load_dataset
+from datasets import load_dataset, logging as logging_datasets
 
 import transformers
 from transformers import (
@@ -66,6 +66,8 @@ check_min_version("4.30.0.dev0")
 require_version("datasets>=1.8.0", "To fix: pip install -r examples/pytorch/language-modeling/requirements.txt")
 
 logger = logging.getLogger(__name__)
+logging_datasets.disable_progress_bar()
+
 MODEL_CONFIG_CLASSES = list(MODEL_FOR_MASKED_LM_MAPPING.keys())
 MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
 os.environ['WANDB_PROJECT']='lil-bevo'
