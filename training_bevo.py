@@ -455,7 +455,7 @@ if __name__=="__main__":
             print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
             if args.wandb_log:
                 wandb.log({
-                    "iter": iter_num,
+                    "train/global_step": iter_num,
                     "train/loss": losses['train'],
                     "eval/loss": losses['val'],
                     "lr": lr,
