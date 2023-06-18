@@ -47,10 +47,16 @@ def arg_parse():
     )
 
     parser.add_argument(
-        '--data',
+        '--train_data',
         type=str,
         required=True,
-        help="point to babyLM 10M or 100M data directory."
+        help="point to one text file containing all train sequences"
+    )
+    parser.add_argument(
+        '--val_data',
+        type=str,
+        required=True,
+        help="point to one text file containing all val sequences"
     )
     parser.add_argument(
         '--tokenizer_model_path',
@@ -109,25 +115,25 @@ def arg_parse():
     parser.add_argument(
         '--batch_size',
         type=int,
-        default=12,
-        help="Batch size."
+        default=8,
+        help="Batch size"
     )
     parser.add_argument(
         '--log_interval',
-        type=int,
-        default=10,
+        type=float,
+        default=0.01,
         help='How often to log metrics'
     )
     parser.add_argument(
         '--eval_interval',
-        type=int,
-        default=100,
+        type=float,
+        default=0.05,
         help="how often to run eval"
     )
     parser.add_argument(
         '--eval_iters',
         type=int,
-        default=400,
+        default=5000,
         help="How many eval iterations to run"
     )
     parser.add_argument(
@@ -181,14 +187,14 @@ if __name__=="__main__":
 
     # adamw optimizer
     learning_rate = 6e-4 # max learning rate
-    max_iters = 100000 # total number of training iterations
-    weight_decay = 1e-1
+    max_iters = 20000 # total number of training iterations
+    weight_decay = 0.1
     beta1 = 0.9
     beta2 = 0.95
     grad_clip = 1.0 # clip gradients at this value, or disable if == 0.0
     # learning rate decay settings
     decay_lr = True # whether to decay the learning rate
-    warmup_iters = 2000 # how many steps to warm up for
+    warmup_iters = 0.01*max_iters # how many steps to warm up for
     min_lr = 6e-5 # minimum learning rate, should be ~= learning_rate/10 per Chinchilla
     device = args.device
     # DDP settings
@@ -273,7 +279,7 @@ if __name__=="__main__":
         # removing the shift in `modeling_bevo.py`). But might want to refactor differently
         # later to maintain flexibility (since this is only for autoregressive LM)
         #NOTE: not sure if it's best to start with pad token -- I couldn't find a bos token...
-        result["input_ids"] = [  [tokenizer.pad_token_id]+x[:-1] for x in result["labels"]]
+        result["input_ids"] = [  [tokenizer.eos_token_id]+x[:-1] for x in result["labels"]]
 
         # Some checks
         assert all([len(x) == seq_len for x in result["input_ids"]])
@@ -288,16 +294,11 @@ if __name__=="__main__":
         RETURNS
         pyTorch Dataloader
         '''
-        # Load the text, and split into array of strings
-        files = glob(data_path + '*')
 
         # Load the data and make into a datasets object
         all_lines = []
-        for file in files:
-            # exclude directories
-            if ('.train' in file) or ('.dev' in file) or ('.test' in file):
-                with open(file, 'r', encoding="utf-8") as f:
-                    all_lines.extend(f.readlines())
+        with open(data_path, 'r', encoding="utf-8") as f:
+            all_lines.extend(f.readlines())
 
         all_data = [{'text': x.strip()} if x.strip() else {'text': ""} for x in all_lines]
 
@@ -322,13 +323,10 @@ if __name__=="__main__":
     # This needs to point to a directory I think
     tokenizer = T5Tokenizer(args.tokenizer_model_path)
 
-    train_path = args.data
-    val_path = '/'.join(args.data.split('/')[:-2]) + '/babylm_dev/'
-
     print("Loading and tokenizing training data...patience please..")
-    train_dataloader = load_data(tokenizer, train_path)
+    train_dataloader = load_data(tokenizer, args.train_data)
     print("Loading and tokenizing validation data...patience please..")
-    val_dataloader = load_data(tokenizer, val_path)
+    val_dataloader = load_data(tokenizer, args.val_data)
 
     # init these up here, can override if init_from='resume' (i.e. from a checkpoint)
     iter_num = 0
@@ -389,6 +387,10 @@ if __name__=="__main__":
     if ddp:
         model = DDP(model, device_ids=[ddp_local_rank])
 
+    # Since we set it up as ratios
+    eval_iters = [int((j/100)*max_iters) for j in range(0, 100+int(args.eval_interval*100), int(args.eval_interval*100))]
+    log_iters = [int((j/100)*max_iters) for j in range(0, 100+int(args.eval_interval*100), int(args.log_interval*100))]
+    import ipdb;ipdb.set_trace()
     # helps estimate an arbitrarily accurate loss over either split using many batches
     @torch.no_grad()
     def estimate_loss():
@@ -396,8 +398,8 @@ if __name__=="__main__":
         model.eval()
         for split in ['train', 'val']:
             dataloader = train_dataloader if split=='train' else val_dataloader
-            losses = torch.zeros(args.eval_iters)
-            for k in range(args.eval_iters):
+            losses = torch.zeros(len(eval_iters))
+            for k in range(len(eval_iters)):
                 with ctx:
                     batch = next(iter(dataloader))
                     outputs = model(batch['input_ids'].to(device), batch['labels'].to(device))
@@ -431,11 +433,10 @@ if __name__=="__main__":
             config=config
         )
 
-    max_iters = len(train_dataloader.dataset)//(args.batch_size*torch.cuda.device_count())
     lr_decay_iters = max_iters
-    eval_interval = max_iters//10 #NOTE: wait, it's also defined above -- which one do we want..?
+
     if master_process:
-        print("number of parameters: %.2fM" % (model.get_num_params()/1e6,))
+        print("number of parameters: %.2fM" % (model.module.get_num_params()/1e6,))
         print("Number of iters: ", max_iters)
 
     # Training loop
@@ -443,14 +444,14 @@ if __name__=="__main__":
     local_iter_num = 0 # number of iterations in the lifetime of this process
     raw_model = model.module if ddp else model # unwrap DDP container if needed
     running_mfu = -1.0
-
+    
     while True:
         # determine and set the learning rate for this iteration
         lr = get_lr(iter_num) if decay_lr else learning_rate
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
         # evaluate the loss on train/val sets and write checkpoints
-        if iter_num % eval_interval == 0 and master_process:
+        if iter_num in eval_iters and master_process:
             losses = estimate_loss()
             print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
             if args.wandb_log:
@@ -511,7 +512,7 @@ if __name__=="__main__":
         t1 = time.time()
         dt = t1 - t0
         t0 = t1
-        if iter_num % args.log_interval == 0 and master_process:
+        if iter_num in log_iters == 0 and master_process:
             # get loss as float. note: this is a CPU-GPU sync point
             # scale up to undo the division above, approximating the true total loss (exact would have been a sum)
             lossf = loss.item() * gradient_accumulation_steps

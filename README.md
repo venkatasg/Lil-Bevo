@@ -72,6 +72,7 @@ Models in bold are ones that we trained and got results.
 *BLiMP*
 | Model | Anaphor Agr. | Agr. Structure | Binding | Control/Raising | D-N Agr. | Ellipsis | Filler-Gap | Irregular Forms | Island Effects | NPI Licensing | Quantifiers | S-V Agr. |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| **DeBERTa-best** | 88.0 | 69.0 | 67.9 | 66.6 | 88.7 | 82.5 | 67.1 | 85.0 | 42.5 | 58.2 | 64.8 | 73.1 |
 | **OPT-125m-best** | 87.3 | 67.2 | 67.7 | 63.9 | 84.4 | 56.1 | 64.5 | 88.2 | 45.0 | 51.2 | 74.3 | 64.4 |
 | OPT-125m | 63.8 | 70.6 | 67.1 | 66.5 | 78.5 | 62 | 63.8 | 67.5 | 48.6 | 46.7 | 59.6 | 56.9 |
 | RoBERTa-base | 81.5 | 67.1 | 67.3 | 67.9 | 90.8 | 76.4 | 63.5 | 87.4 | 39.9 | 55.9 | 70.5 | 65.4 |
