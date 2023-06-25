@@ -18,5 +18,5 @@ if __name__ == "__main__":
         split_digits=args.split_digits,
         byte_fallback=args.byte_fallback,
         max_sentence_length=1000000,
-        user_defined_symbols='<mask>'
+        user_defined_symbols='<mask>, <cls>'
     )
