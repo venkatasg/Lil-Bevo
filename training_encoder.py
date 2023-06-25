@@ -110,7 +110,7 @@ class ModelArguments:
         metadata={"help": "Where do you want to store the pretrained models downloaded from huggingface.co"},
     )
     use_fast_tokenizer: bool = field(
-        default=True,
+        default=False,
         metadata={"help": "Whether to use one of the fast tokenizer (backed by the tokenizers library) or not."},
     )
     model_revision: str = field(
@@ -372,11 +372,17 @@ def main():
     #
     # Distributed training:
     # The .from_pretrained methods guarantee that only one local process can concurrently
+    
+    # Load our custom tokenizer
+    tokenizer = T5Tokenizer(model_args.tokenizer_name, mlm=True)
+    tokenizer.mask_token = '<mask>'
+    
     # download model & vocab.
     config_kwargs = {
         "cache_dir": model_args.cache_dir,
         "revision": model_args.model_revision,
         "use_auth_token": True if model_args.use_auth_token else None,
+        "vocab_size": tokenizer.vocab_size
     }
     if model_args.config_name:
         config = AutoConfig.from_pretrained(model_args.config_name, **config_kwargs)
@@ -390,9 +396,7 @@ def main():
             config.update_from_string(model_args.config_overrides)
             logger.info(f"New config: {config}")
 
-    # Load our custom tokenizer
-    tokenizer = T5Tokenizer(model_args.tokenizer_name, mlm=True)
-    tokenizer.mask_token = '<mask>'
+    
     
     if model_args.model_name_or_path:
         model = AutoModelForMaskedLM.from_pretrained(
