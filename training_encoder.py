@@ -40,6 +40,7 @@ import evaluate
 from datasets import load_dataset, logging as logging_datasets
 
 import transformers
+import torch
 from transformers import (
     CONFIG_MAPPING,
     MODEL_FOR_MASKED_LM_MAPPING,
@@ -52,9 +53,8 @@ from transformers import (
     TrainingArguments,
     is_torch_tpu_available,
     set_seed,
-    T5Tokenizer
+    AutoTokenizer
 )
-from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version, send_example_telemetry
 from transformers.utils.versions import require_version
 
@@ -78,14 +78,6 @@ class ModelArguments:
     Arguments pertaining to which model/config/tokenizer we are going to fine-tune, or train from scratch.
     """
 
-    model_name_or_path: Optional[str] = field(
-        default=None,
-        metadata={
-            "help": (
-                "The model checkpoint for weights initialization. Don't set if you want to train a model from scratch."
-            )
-        },
-    )
     model_type: Optional[str] = field(
         default=None,
         metadata={"help": "If training from scratch, pass a model type from the list: " + ", ".join(MODEL_TYPES)},
@@ -102,7 +94,7 @@ class ModelArguments:
     config_name: Optional[str] = field(
         default=None, metadata={"help": "Pretrained config name or path if not the same as model_name"}
     )
-    tokenizer_name: Optional[str] = field(
+    tokenizer_name_or_path: Optional[str] = field(
         default=None, metadata={"help": "Pretrained tokenizer name or path if not the same as model_name"}
     )
     cache_dir: Optional[str] = field(
@@ -170,7 +162,7 @@ class DataTrainingArguments:
         },
     )
     max_seq_length: Optional[int] = field(
-        default=None,
+        default=512,
         metadata={
             "help": (
                 "The maximum total input sequence length after tokenization. Sequences longer "
@@ -208,7 +200,7 @@ class DataTrainingArguments:
         },
     )
     max_eval_samples: Optional[int] = field(
-        default=None,
+        default=10000,
         metadata={
             "help": (
                 "For debugging purposes or quicker training, truncate the number of evaluation examples to this "
@@ -277,21 +269,6 @@ def main():
     )
     # Set the verbosity to info of the Transformers logger (on main process only):
     logger.info(f"Training/evaluation parameters {training_args}")
-
-    # Detecting last checkpoint.
-    last_checkpoint = None
-    if os.path.isdir(training_args.output_dir) and training_args.do_train and not training_args.overwrite_output_dir:
-        last_checkpoint = get_last_checkpoint(training_args.output_dir)
-        if last_checkpoint is None and len(os.listdir(training_args.output_dir)) > 0:
-            raise ValueError(
-                f"Output directory ({training_args.output_dir}) already exists and is not empty. "
-                "Use --overwrite_output_dir to overcome."
-            )
-        elif last_checkpoint is not None and training_args.resume_from_checkpoint is None:
-            logger.info(
-                f"Checkpoint detected, resuming training at {last_checkpoint}. To avoid this behavior, change "
-                "the `--output_dir` or add `--overwrite_output_dir` to train from scratch."
-            )
 
     # Set seed before initializing model.
     set_seed(training_args.seed)
@@ -374,15 +351,14 @@ def main():
     # The .from_pretrained methods guarantee that only one local process can concurrently
     
     # Load our custom tokenizer
-    tokenizer = T5Tokenizer(model_args.tokenizer_name, mlm=True)
-    tokenizer.mask_token = '<mask>'
+    tokenizer = AutoTokenizer.from_pretrained(model_args.tokenizer_name_or_path, use_fast=False)
     
     # download model & vocab.
     config_kwargs = {
         "cache_dir": model_args.cache_dir,
         "revision": model_args.model_revision,
         "use_auth_token": True if model_args.use_auth_token else None,
-        "vocab_size": tokenizer.vocab_size
+        "vocab_size": tokenizer.vocab_size,
     }
     if model_args.config_name:
         config = AutoConfig.from_pretrained(model_args.config_name, **config_kwargs)
@@ -398,20 +374,21 @@ def main():
 
     
     
-    if model_args.model_name_or_path:
+    if training_args.resume_from_checkpoint:
         model = AutoModelForMaskedLM.from_pretrained(
-            model_args.model_name_or_path,
-            from_tf=bool(".ckpt" in model_args.model_name_or_path),
+            training_args.resume_from_checkpoint,
+            from_tf=bool(".ckpt" in training_args.resume_from_checkpoint),
             config=config,
             cache_dir=model_args.cache_dir,
             revision=model_args.model_revision,
             use_auth_token=True if model_args.use_auth_token else None,
             low_cpu_mem_usage=model_args.low_cpu_mem_usage,
+            ignore_mismatched_sizes=True
         )
     else:
         logger.info("Training new model from scratch")
         model = AutoModelForMaskedLM.from_config(config)
-
+    import ipdb;ipdb.set_trace()
     # We resize the embeddings only when necessary to avoid index errors. If you are creating a model from scratch
     # on a small vocab and want a smaller embedding size, remove this test.
     embedding_size = model.get_input_embeddings().weight.shape[0]
@@ -425,23 +402,8 @@ def main():
     else:
         column_names = list(raw_datasets["validation"].features)
     text_column_name = "text" if "text" in column_names else column_names[0]
-
-    if data_args.max_seq_length is None:
-        max_seq_length = tokenizer.model_max_length
-        if max_seq_length > 1024:
-            logger.warning(
-                "The chosen tokenizer supports a `model_max_length` that is longer than the default `block_size` value"
-                " of 1024. If you would like to use a longer `block_size` up to `tokenizer.model_max_length` you can"
-                " override this default with `--block_size xxx`."
-            )
-            max_seq_length = 1024
-    else:
-        if data_args.max_seq_length > tokenizer.model_max_length:
-            logger.warning(
-                f"The max_seq_length passed ({data_args.max_seq_length}) is larger than the maximum length for the"
-                f"model ({tokenizer.model_max_length}). Using max_seq_length={tokenizer.model_max_length}."
-            )
-        max_seq_length = min(data_args.max_seq_length, tokenizer.model_max_length)
+    
+    max_seq_length = data_args.max_seq_length
 
     if data_args.line_by_line:
         # When using line_by_line, we just tokenize each nonempty line.
@@ -504,16 +466,16 @@ def main():
 
         # Main data processing function that will concatenate all texts from our dataset and generate chunks of
         # max_seq_length.
-        def group_texts(examples):
+        def group_texts(examples, max_len):
             # Concatenate all texts.
             concatenated_examples = {k: list(chain(*examples[k])) for k in examples.keys()}
             total_length = len(concatenated_examples[list(examples.keys())[0]])
-            # We drop the small remainder, and if the total_length < max_seq_length  we exclude this batch and return an empty dict.
+            # We drop the small remainder, and if the total_length < max_len  we exclude this batch and return an empty dict.
             # We could add padding if the model supported it instead of this drop, you can customize this part to your needs.
-            total_length = (total_length // max_seq_length) * max_seq_length
+            total_length = (total_length // max_len) * max_len
             # Split by chunks of max_len.
             result = {
-                k: [t[i : i + max_seq_length] for i in range(0, total_length, max_seq_length)]
+                k: [t[i : i + max_len] for i in range(0, total_length, max_len)]
                 for k, t in concatenated_examples.items()
             }
             return result
@@ -524,15 +486,22 @@ def main():
         #
         # To speed up this part, we use multiprocessing. See the documentation of the map method for more information:
         # https://huggingface.co/docs/datasets/package_reference/main_classes.html#datasets.Dataset.map
-
+        
         with training_args.main_process_first(desc="grouping texts together"):
             if not data_args.streaming:
-                tokenized_datasets = tokenized_datasets.map(
-                    group_texts,
+                tokenized_datasets['train'] = tokenized_datasets['train'].map( 
+                    lambda x: group_texts(x, max_len=max_seq_length),
                     batched=True,
                     num_proc=data_args.preprocessing_num_workers,
                     load_from_cache_file=not data_args.overwrite_cache,
-                    desc=f"Grouping texts in chunks of {max_seq_length}",
+                    desc=f"Grouping texts in chunks of {max_seq_length}"
+                )
+                tokenized_datasets['validation'] = tokenized_datasets['validation'].map(
+                    lambda x: group_texts(x, max_len=512),
+                    batched=True,
+                    num_proc=data_args.preprocessing_num_workers,
+                    load_from_cache_file=not data_args.overwrite_cache,
+                    desc=f"Grouping texts in chunks of 512"
                 )
             else:
                 tokenized_datasets = tokenized_datasets.map(
@@ -601,12 +570,7 @@ def main():
 
     # Training
     if training_args.do_train:
-        checkpoint = None
-        if training_args.resume_from_checkpoint is not None:
-            checkpoint = training_args.resume_from_checkpoint
-        elif last_checkpoint is not None:
-            checkpoint = last_checkpoint
-        train_result = trainer.train(resume_from_checkpoint=checkpoint)
+        train_result = trainer.train()
         trainer.save_model()  # Saves the tokenizer too for easy upload
         metrics = train_result.metrics
 
@@ -635,6 +599,10 @@ def main():
 
         trainer.log_metrics("eval", metrics)
         trainer.save_metrics("eval", metrics)
+        
+    ## This should save best model at end I think?
+    trainer.save_model()
+    trainer.save_state()
 
     kwargs = {"finetuned_from": model_args.model_name_or_path, "tasks": "fill-mask"}
     if data_args.dataset_name is not None:
