@@ -351,7 +351,7 @@ def main():
     # The .from_pretrained methods guarantee that only one local process can concurrently
     
     # Load our custom tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(model_args.tokenizer_name_or_path, use_fast=False)
+    tokenizer = AutoTokenizer.from_pretrained(model_args.tokenizer_name_or_path)
     
     # download model & vocab.
     config_kwargs = {
@@ -383,12 +383,13 @@ def main():
             revision=model_args.model_revision,
             use_auth_token=True if model_args.use_auth_token else None,
             low_cpu_mem_usage=model_args.low_cpu_mem_usage,
-            ignore_mismatched_sizes=True
+            ignore_mismatched_sizes=True,
+            local_files_only=True
         )
     else:
         logger.info("Training new model from scratch")
         model = AutoModelForMaskedLM.from_config(config)
-    import ipdb;ipdb.set_trace()
+
     # We resize the embeddings only when necessary to avoid index errors. If you are creating a model from scratch
     # on a small vocab and want a smaller embedding size, remove this test.
     embedding_size = model.get_input_embeddings().weight.shape[0]
@@ -403,8 +404,6 @@ def main():
         column_names = list(raw_datasets["validation"].features)
     text_column_name = "text" if "text" in column_names else column_names[0]
     
-    max_seq_length = data_args.max_seq_length
-
     if data_args.line_by_line:
         # When using line_by_line, we just tokenize each nonempty line.
         padding = "max_length" if data_args.pad_to_max_length else False
@@ -418,7 +417,7 @@ def main():
                 examples[text_column_name],
                 padding=padding,
                 truncation=True,
-                max_length=max_seq_length,
+                max_length=data_args.max_seq_length,
                 # We use this option because DataCollatorForLanguageModeling (see below) is more efficient when it
                 # receives the `special_tokens_mask`.
                 return_special_tokens_mask=True,
@@ -465,7 +464,7 @@ def main():
                 )
 
         # Main data processing function that will concatenate all texts from our dataset and generate chunks of
-        # max_seq_length.
+        # data_args.max_seq_length.
         def group_texts(examples, max_len):
             # Concatenate all texts.
             concatenated_examples = {k: list(chain(*examples[k])) for k in examples.keys()}
@@ -486,29 +485,29 @@ def main():
         #
         # To speed up this part, we use multiprocessing. See the documentation of the map method for more information:
         # https://huggingface.co/docs/datasets/package_reference/main_classes.html#datasets.Dataset.map
-        
         with training_args.main_process_first(desc="grouping texts together"):
             if not data_args.streaming:
                 tokenized_datasets['train'] = tokenized_datasets['train'].map( 
-                    lambda x: group_texts(x, max_len=max_seq_length),
+                    lambda x: group_texts(x, max_len=data_args.max_seq_length),
                     batched=True,
                     num_proc=data_args.preprocessing_num_workers,
                     load_from_cache_file=not data_args.overwrite_cache,
-                    desc=f"Grouping texts in chunks of {max_seq_length}"
+                    desc=f"Grouping texts in chunks of {data_args.max_seq_length}"
                 )
                 tokenized_datasets['validation'] = tokenized_datasets['validation'].map(
                     lambda x: group_texts(x, max_len=512),
                     batched=True,
                     num_proc=data_args.preprocessing_num_workers,
                     load_from_cache_file=not data_args.overwrite_cache,
-                    desc=f"Grouping texts in chunks of 512"
+                    desc=f"Grouping eval texts in chunks of 512"
                 )
             else:
                 tokenized_datasets = tokenized_datasets.map(
                     group_texts,
                     batched=True,
                 )
-
+    num_params=sum(p.numel() for p in model.parameters())
+    print("MODEL SIZE: ", f'{num_params:,}')
     if training_args.do_train:
         if "train" not in tokenized_datasets:
             raise ValueError("--do_train requires a train dataset")
@@ -570,7 +569,7 @@ def main():
 
     # Training
     if training_args.do_train:
-        train_result = trainer.train()
+        train_result = trainer.train(resume_from_checkpoint=False)
         trainer.save_model()  # Saves the tokenizer too for easy upload
         metrics = train_result.metrics
 
@@ -603,20 +602,6 @@ def main():
     ## This should save best model at end I think?
     trainer.save_model()
     trainer.save_state()
-
-    kwargs = {"finetuned_from": model_args.model_name_or_path, "tasks": "fill-mask"}
-    if data_args.dataset_name is not None:
-        kwargs["dataset_tags"] = data_args.dataset_name
-        if data_args.dataset_config_name is not None:
-            kwargs["dataset_args"] = data_args.dataset_config_name
-            kwargs["dataset"] = f"{data_args.dataset_name} {data_args.dataset_config_name}"
-        else:
-            kwargs["dataset"] = data_args.dataset_name
-
-    if training_args.push_to_hub:
-        trainer.push_to_hub(**kwargs)
-    else:
-        trainer.create_model_card(**kwargs)
     
     wandb.finish()
 
