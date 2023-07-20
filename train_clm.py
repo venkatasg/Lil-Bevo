@@ -69,6 +69,7 @@ def main():
     parser.add_argument('-e', '--epochs', type=int, help='Number of training epochs')
     parser.add_argument('-tb', '--per_device_train_batch_size', type=int, help='per device train Batch size')
     parser.add_argument('-db', '--per_device_eval_batch_size', type=int, help='per device eval Batch size')
+    parser.add_argument('-lm', '--mlm_or_clm', type=str, help='Masked lm or corrective lm')
     args = parser.parse_args()
 
     outputdirectory = args.outputdirectory
@@ -77,6 +78,10 @@ def main():
     dev_dir = args.dev_dir
     from_scratch = args.from_scratch
     num_epochs = args.epochs
+    data_collator_type = args.mlm_or_clm
+
+    if data_collator_type not in ['mlm','clm']:
+        raise ValueError("Must be mlm or clm")
 
     #NOTE: this is the 512- token version. For the 128-token version, see the other .txt files
     def load_original_and_replaced(train_dir, dev_dir, num_samples=None):
@@ -150,6 +155,26 @@ def main():
         return tokenizer, model
 
 
+    def mlm_data_collator(features):
+        """
+        """
+        pad_token = -100
+        mask_token_id = tokenizer.mask_token_id
+
+        for feature in features:
+            #replaced = feature.pop("replaced")
+            replaced = feature['input_ids']
+            original = feature['labels']
+
+            # note labels are the original uncorrupted version. Will only compute
+            # loss over the modified tokens so:
+            newlabels = [-100 if replaced[ii]==original[ii] else i for ii,i in enumerate(original) ]
+            feature['labels'] = newlabels
+            feature['input_ids'] = [i if replaced[ii] == original[ii] else mask_token_id for ii,i in enumerate(original)]
+
+        return default_data_collator(features)
+    
+
     def clm_data_collator(features):
         """
         """
@@ -163,11 +188,17 @@ def main():
 
             # note labels are the original uncorrupted version. Will only compute
             # loss over the modified tokens so:
-            newlabels = [-100 if replaced[ii]==original[ii] else i for ii,i in enumerate(replaced) ]
+            newlabels = [-100 if replaced[ii]==original[ii] else i for ii,i in enumerate(original) ]
             feature['labels'] = newlabels
 
         return default_data_collator(features)
 
+    if data_collator_type == 'clm':
+        selected_data_collator = clm_data_collator
+
+    if data_collator_type == 'mlm':
+        selected_data_collator = mlm_data_collator
+    
     #num_samples = 1000 #None
     num_samples = None
 
@@ -255,7 +286,7 @@ def main():
         args=training_args,
         train_dataset=tokenized_dataset["train"],
         eval_dataset=tokenized_dataset["validation"],
-        data_collator=clm_data_collator,#, whole_word_masking_data_collator,#data_collator,
+        data_collator=selected_data_collator,#, whole_word_masking_data_collator,#data_collator,
         tokenizer=tokenizer
         #compute_metrics= #function to compute metrics here
     )
