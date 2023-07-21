@@ -1,531 +1,614 @@
+'''
+Train any encoder style model on babyLM using this script taken from huggingface run_clm.py
+Concatenate all train and dev files into one txt file using `cat *.train > train.txt' and then pass that as the train/dev file to this script.
+This script is the same as run_mlm.py except it loads our tokenizer.
+'''
+
+#!/usr/bin/env python
+# coding=utf-8
+# Copyright 2020 The HuggingFace Team All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 """
-Training script modified from Karpathy's nanoGPT:
-    https://github.com/karpathy/nanoGPT/blob/master/train.py
+Fine-tuning the library models for masked language modeling (BERT, ALBERT, RoBERTa...) on a text file or a dataset.
 
-This training script can be run both on a single gpu in debug mode,
-and also in a larger training run with distributed data parallel (ddp).
-
-To run on a single GPU, example:
-$ python train.py
-
-To run with DDP on 4 gpus on 1 node, example:
-$ torchrun --standalone --nproc_per_node=4 train.py
+Here is the full list of checkpoints on the hub that can be fine-tuned by this script:
+https://huggingface.co/models?filter=fill-mask
 """
+# You can also adapt this script on your own masked language modeling task. Pointers for this are left as comments.
 
-import os
-import time
-import math
-from contextlib import nullcontext
-import numpy as np
-import torch
-from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.distributed import init_process_group, destroy_process_group
-from torch.utils.data import DataLoader, DistributedSampler
-import argparse
-import ipdb
-from transformers import T5Tokenizer, set_seed, AutoModelForCausalLM, logging as logging_transformers
 import logging
-import random
-from glob import glob
-from datasets import Dataset, load_from_disk, logging as logging_datasets
-from random import shuffle
+import math
+import os
 import sys
+from dataclasses import dataclass, field
+from itertools import chain
+from typing import Optional
 
-from modeling_bevo import BevoConfig, BevoForCausalLM
+import datasets
+import evaluate
+from datasets import load_dataset, logging as logging_datasets
 
+import transformers
+import torch
+from transformers import (
+    CONFIG_MAPPING,
+    MODEL_FOR_MASKED_LM_MAPPING,
+    AutoConfig,
+    AutoModelForMaskedLM,
+    AutoTokenizer,
+    DataCollatorForLanguageModeling,
+    HfArgumentParser,
+    Trainer,
+    TrainingArguments,
+    is_torch_tpu_available,
+    set_seed,
+    AutoTokenizer
+)
+from transformers.utils import check_min_version, send_example_telemetry
+from transformers.utils.versions import require_version
+
+import wandb
+
+# Will error if the minimal version of Transformers is not installed. Remove at your own risks.
+check_min_version("4.30.0.dev0")
+
+require_version("datasets>=1.8.0", "To fix: pip install -r examples/pytorch/language-modeling/requirements.txt")
+
+logger = logging.getLogger(__name__)
 logging_datasets.disable_progress_bar()
-logging_transformers.set_verbosity_error()
-logger = logging.getLogger("pytorch")
-logger.propagate = False
-logger.setLevel(logging.ERROR)
 
-def arg_parse():
-    # Define argument parser instead of the weird configurator that Karpathy setup
-    parser = argparse.ArgumentParser(
-    prog='Training script for lil Bevo',
-    description='Trains a GPT style decoder model on training data',
+MODEL_CONFIG_CLASSES = list(MODEL_FOR_MASKED_LM_MAPPING.keys())
+MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
+os.environ['WANDB_PROJECT']='lil-bevo'
+
+@dataclass
+class ModelArguments:
+    """
+    Arguments pertaining to which model/config/tokenizer we are going to fine-tune, or train from scratch.
+    """
+
+    model_type: Optional[str] = field(
+        default=None,
+        metadata={"help": "If training from scratch, pass a model type from the list: " + ", ".join(MODEL_TYPES)},
+    )
+    config_overrides: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": (
+                "Override some existing default config settings when a model is trained from scratch. Example: "
+                "n_embd=10,resid_pdrop=0.2,scale_attn_weights=false,summary_type=cls_index"
+            )
+        },
+    )
+    config_name: Optional[str] = field(
+        default=None, metadata={"help": "Pretrained config name or path if not the same as model_name"}
+    )
+    tokenizer_name_or_path: Optional[str] = field(
+        default=None, metadata={"help": "Pretrained tokenizer name or path if not the same as model_name"}
+    )
+    cache_dir: Optional[str] = field(
+        default=None,
+        metadata={"help": "Where do you want to store the pretrained models downloaded from huggingface.co"},
+    )
+    use_fast_tokenizer: bool = field(
+        default=False,
+        metadata={"help": "Whether to use one of the fast tokenizer (backed by the tokenizers library) or not."},
+    )
+    model_revision: str = field(
+        default="main",
+        metadata={"help": "The specific model version to use (can be a branch name, tag name or commit id)."},
+    )
+    use_auth_token: bool = field(
+        default=False,
+        metadata={
+            "help": (
+                "Will use the token generated when running `huggingface-cli login` (necessary to use this script "
+                "with private models)."
+            )
+        },
+    )
+    low_cpu_mem_usage: bool = field(
+        default=False,
+        metadata={
+            "help": (
+                "It is an option to create the model as an empty shell, then only materialize its parameters when the pretrained weights are loaded."
+                "set True will benefit LLM loading time and RAM consumption."
+            )
+        },
     )
 
-    parser.add_argument(
-        '--train_data',
-        type=str,
-        required=True,
-        help="point to one text file containing all train sequences"
-    )
-    parser.add_argument(
-        '--val_data',
-        type=str,
-        required=True,
-        help="point to one text file containing all val sequences"
-    )
-    parser.add_argument(
-        '--tokenizer_model_path',
-        type=str,
-        required=True,
-        help="point to tokenizer .model file to use"
-    )
-    parser.add_argument(
-        '--out_dir',
-        type=str,
-        default='out/',
-        help="where to store model outputs"
-    )
-    parser.add_argument(
-        '--seq_len',
-        type=int,
-        default=128,
-        help="Maximum sequence length (in tokens) for input."
-    )
-    parser.add_argument(
-        '--num_hidden_layers',
-        type=int,
-        default=12,
-        help="Number of transformer blocks."
-    )
-    parser.add_argument(
-        '--hidden_size',
-        type=int,
-        default=768,
-        help="Embedding size."
-    )
-    parser.add_argument(
-        '--num_attention_heads',
-        type=int,
-        default=12,
-        help="Number of attention_heads."
-    )
-    parser.add_argument(
-        '--dropout',
-        type=float,
-        default=0.1,
-        help="Dropout in MLP layers."
-    )
-    parser.add_argument(
-        '--attention_dropout',
-        type=float,
-        default=0,
-        help="Dropout in attention layers."
-    )
-    parser.add_argument(
-        '--bias',
-        type=bool,
-        default=True,
-        help="Bias in hidden layers."
-    )
-    parser.add_argument(
-        '--batch_size',
-        type=int,
-        default=8,
-        help="Batch size"
-    )
-    parser.add_argument(
-        '--log_interval',
-        type=float,
-        default=0.01,
-        help='How often to log metrics'
-    )
-    parser.add_argument(
-        '--eval_interval',
-        type=float,
-        default=0.05,
-        help="how often to run eval"
-    )
-    parser.add_argument(
-        '--eval_iters',
-        type=int,
-        default=5000,
-        help="How many eval iterations to run"
-    )
-    parser.add_argument(
-        '--eval_only',
-        action='store_true',
-        help="Pass if you just want to evaluate the model"
-    )
-    parser.add_argument(
-        '--always_save_checkpoint',
-        action='store_true',
-        help="Always save checkpoint regardless of whether validation loss goes down"
-    )
-    parser.add_argument(
-        '--device',
-        type=str,
-        default='cuda',
-        help="cpu, cuda, mps"
-    )
-    parser.add_argument(
-        '--init_from',
-        type=str,
-        default='scratch',
-        help="scratch or resume"
-    )
-    parser.add_argument(
-        '--wandb_log',
-        action='store_true',
-        help="Log to wandb"
-    )
-    parser.add_argument(
-        '--wandb_project',
-        type=str,
-        default='lil-bevo',
-        help="Don't change this"
-    )
-    parser.add_argument(
-        '--wandb_run_name',
-        type=str,
-        help="You must set a run name if wandb_log is passed"
-    )
-    args = parser.parse_args()
+    def __post_init__(self):
+        if self.config_overrides is not None and (self.config_name is not None or self.model_name_or_path is not None):
+            raise ValueError(
+                "--config_overrides can't be used in combination with --config_name or --model_name_or_path"
+            )
 
-    return args
 
-if __name__=="__main__":
-    args = arg_parse()
+@dataclass
+class DataTrainingArguments:
+    """
+    Arguments pertaining to what data we are going to input our model for training and eval.
+    """
 
-    # -----------------------------------------------------------------------------
-    # Hyperparameters for training
-    gradient_accumulation_steps = 36 # used to simulate larger batch sizes
+    dataset_name: Optional[str] = field(
+        default=None, metadata={"help": "The name of the dataset to use (via the datasets library)."}
+    )
+    dataset_config_name: Optional[str] = field(
+        default=None, metadata={"help": "The configuration name of the dataset to use (via the datasets library)."}
+    )
+    train_file: Optional[str] = field(default=None, metadata={"help": "The input training data file (a text file)."})
+    validation_file: Optional[str] = field(
+        default=None,
+        metadata={"help": "An optional input evaluation data file to evaluate the perplexity on (a text file)."},
+    )
+    overwrite_cache: bool = field(
+        default=False, metadata={"help": "Overwrite the cached training and evaluation sets"}
+    )
+    validation_split_percentage: Optional[int] = field(
+        default=5,
+        metadata={
+            "help": "The percentage of the train set used as validation set in case there's no validation split"
+        },
+    )
+    max_seq_length: Optional[int] = field(
+        default=512,
+        metadata={
+            "help": (
+                "The maximum total input sequence length after tokenization. Sequences longer "
+                "than this will be truncated."
+            )
+        },
+    )
+    preprocessing_num_workers: Optional[int] = field(
+        default=None,
+        metadata={"help": "The number of processes to use for the preprocessing."},
+    )
+    mlm_probability: float = field(
+        default=0.15, metadata={"help": "Ratio of tokens to mask for masked language modeling loss"}
+    )
+    line_by_line: bool = field(
+        default=False,
+        metadata={"help": "Whether distinct lines of text in the dataset are to be handled as distinct sequences."},
+    )
+    pad_to_max_length: bool = field(
+        default=False,
+        metadata={
+            "help": (
+                "Whether to pad all samples to `max_seq_length`. "
+                "If False, will pad the samples dynamically when batching to the maximum length in the batch."
+            )
+        },
+    )
+    max_train_samples: Optional[int] = field(
+        default=None,
+        metadata={
+            "help": (
+                "For debugging purposes or quicker training, truncate the number of training examples to this "
+                "value if set."
+            )
+        },
+    )
+    max_eval_samples: Optional[int] = field(
+        default=10000,
+        metadata={
+            "help": (
+                "For debugging purposes or quicker training, truncate the number of evaluation examples to this "
+                "value if set."
+            )
+        },
+    )
+    streaming: bool = field(default=False, metadata={"help": "Enable streaming mode"})
 
-    # adamw optimizer
-    learning_rate = 6e-4 # max learning rate
-    max_iters = 20000 # total number of training iterations
-    weight_decay = 0.1
-    beta1 = 0.9
-    beta2 = 0.95
-    grad_clip = 1.0 # clip gradients at this value, or disable if == 0.0
-    # learning rate decay settings
-    decay_lr = True # whether to decay the learning rate
-    warmup_iters = 0.01*max_iters # how many steps to warm up for
-    min_lr = 6e-5 # minimum learning rate, should be ~= learning_rate/10 per Chinchilla
-    device = args.device
-    # DDP settings
-    backend = 'nccl' # 'nccl', 'gloo', etc.
-    # system
-    dtype = 'float16' #NOTE was 'bfloat16' but did not work with my setup.  'bfloat16' # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
-    compile = True if args.device!='mps' else False # use PyTorch 2.0 to compile the model to be faster
-    # -----------------------------------------------------------------------------
+    def __post_init__(self):
+        if self.streaming:
+            require_version("datasets>=2.0.0", "The streaming feature requires `datasets>=2.0.0`")
 
-    # various inits, derived attributes, I/O setup
-    ddp = int(os.environ.get('RANK', -1)) != -1 # is this a ddp run?
-    if ddp:
-        init_process_group(backend=backend)
-        ddp_rank = int(os.environ['RANK'])
-        ddp_local_rank = int(os.environ['LOCAL_RANK'])
-        ddp_world_size = int(os.environ['WORLD_SIZE'])
-        device = f'cuda:{ddp_local_rank}'
-        torch.cuda.set_device(device)
-        master_process = ddp_rank == 0 # this process will do logging, checkpointing etc.
-        seed_offset = ddp_rank # each process gets a different seed
-        assert gradient_accumulation_steps % torch.cuda.device_count() == 0
-        gradient_accumulation_steps //= torch.cuda.device_count()
+        if self.dataset_name is None and self.train_file is None and self.validation_file is None:
+            raise ValueError("Need either a dataset name or a training/validation file.")
+        else:
+            if self.train_file is not None:
+                extension = self.train_file.split(".")[-1]
+                if extension not in ["csv", "json", "txt"]:
+                    raise ValueError("`train_file` should be a csv, a json or a txt file.")
+            if self.validation_file is not None:
+                extension = self.validation_file.split(".")[-1]
+                if extension not in ["csv", "json", "txt"]:
+                    raise ValueError("`validation_file` should be a csv, a json or a txt file.")
+
+
+def main():
+    # See all possible arguments in src/transformers/training_args.py
+    # or by passing the --help flag to this script.
+    # We now keep distinct sets of args, for a cleaner separation of concerns.
+
+    parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments))
+    if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
+        # If we pass only one argument to the script and it's the path to a json file,
+        # let's parse it to get our arguments.
+        model_args, data_args, training_args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
     else:
-        # if not ddp, we are running on a single gpu, and one process
-        master_process = True
-        seed_offset = 0
-        ddp_world_size = 1
-    tokens_per_iter = gradient_accumulation_steps * ddp_world_size * args.batch_size * args.seq_len
-    # print(f"tokens per iteration will be: {tokens_per_iter:,}")
+        model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
-    if master_process:
-        os.makedirs(args.out_dir, exist_ok=True)
-    torch.manual_seed(78727 + seed_offset)
-    torch.cuda.manual_seed_all(78727 + seed_offset)
-    random.seed(78727 + seed_offset)
-    np.random.seed(78727 + seed_offset)
-    set_seed(78727)
-    torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
-    torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
-    device_type = 'cuda' if 'cuda' in device else 'cpu' # for later use in torch.autocast
-    # note: float16 data type will automatically use a GradScaler
-    ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype]
-    ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
+    # Sending telemetry. Tracking the example usage helps us better allocate resources to maintain them. The
+    # information sent is the one passed as arguments along with your Python/PyTorch versions.
+    send_example_telemetry("run_mlm", model_args, data_args)
 
-    #-------------------------------------------------------------------------------
-    # Data loading, tokenization, etc
+    # Setup logging
+    logging.basicConfig(
+        format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
+        datefmt="%m/%d/%Y %H:%M:%S",
+        handlers=[logging.StreamHandler(sys.stdout)],
+    )
 
-    def tokenize_and_split_seq(raw_text, seq_len):
-        batch = tokenizer(raw_text['text'])
-        concatenated_examples = {k: sum(batch[k], []) for k in batch.keys()}
-        total_length = len(concatenated_examples[list(batch.keys())[0]])
-        # Find what length to add padding
-        remainder = total_length % seq_len
-        if remainder != 0:
-            to_add = seq_len - remainder
-        elif remainder == 0:
-            to_add = 0
-        to_add_input_id = [tokenizer.pad_token_id] * to_add
-        to_add_atten_mask = [0] * to_add
+    if training_args.should_log:
+        # The default of training_args.log_level is passive, so we set log level at info here to have that default.
+        transformers.utils.logging.set_verbosity_info()
 
-        # split at 128 and pad the rest
-        pad_dict = dict(input_ids=to_add_input_id, attention_mask=to_add_atten_mask)
-        for key in concatenated_examples.keys():
-            t = concatenated_examples[key]
-            t1 = [item for sublist in [t, pad_dict[key]] for item in sublist]
-            assert not len(t1) % seq_len
-            concatenated_examples[key] = t1
-        total_length_use = len(concatenated_examples[list(batch.keys())[0]])
-        result = {
-            k: [t[i: i + seq_len] for i in range(0, total_length_use, seq_len)]
-            for k, t in concatenated_examples.items()
-        }
+    log_level = training_args.get_process_log_level()
+    logger.setLevel(log_level)
+    datasets.utils.logging.set_verbosity(log_level)
+    transformers.utils.logging.set_verbosity(log_level)
+    transformers.utils.logging.enable_default_handler()
+    transformers.utils.logging.enable_explicit_format()
 
-        # Label is -100 if attention mask is 0, otherwise same as input ids
-        #NOTE actually EOS token is 2, not -100  (when using the uni16k tokenizer)
-        result["labels"] = result["input_ids"].copy()
-        result["labels"] = [
-            [tokenizer.eos_token_id if mask == 0 else token for mask, token in mask_and_tokens] for mask_and_tokens in
-            [zip(masks, labels) for masks, labels in zip(result["attention_mask"], result["labels"])]
-        ]
-        #NOTE: the following line fixes the abnormal (low) loss issue (together with
-        # removing the shift in `modeling_bevo.py`). But might want to refactor differently
-        # later to maintain flexibility (since this is only for autoregressive LM)
-        #NOTE: not sure if it's best to start with pad token -- I couldn't find a bos token...
-        result["input_ids"] = [  [tokenizer.eos_token_id]+x[:-1] for x in result["labels"]]
+    # Log on each process the small summary:
+    logger.warning(
+        f"Process rank: {training_args.local_rank}, device: {training_args.device}, n_gpu: {training_args.n_gpu}"
+        + f"distributed training: {bool(training_args.local_rank != -1)}, 16-bits training: {training_args.fp16}"
+    )
+    # Set the verbosity to info of the Transformers logger (on main process only):
+    logger.info(f"Training/evaluation parameters {training_args}")
 
-        # Some checks
-        assert all([len(x) == seq_len for x in result["input_ids"]])
-        assert all([len(x) == seq_len for x in result["attention_mask"]])
-        assert all([len(x) == seq_len for x in result["labels"]])
-        return result
+    # Set seed before initializing model.
+    set_seed(training_args.seed)
 
-    def load_data(tokenizer, data_path):
-        '''
-        This loads the data, tokenizes it and makes a pyTorch dataloader of it
-
-        RETURNS
-        pyTorch Dataloader
-        '''
-
-        # Load the data and make into a datasets object
-        all_lines = []
-        with open(data_path, 'r', encoding="utf-8") as f:
-            all_lines.extend(f.readlines())
-
-        all_data = [{'text': x.strip()} if x.strip() else {'text': ""} for x in all_lines]
-
-        # Convert all_data to huggingface datasets object
-        full_dataset = Dataset.from_list(all_data)
-        # Tokenize and splits the data into seq_len token length sequences with padding
-        full_dataset = full_dataset.map(
-            lambda x: tokenize_and_split_seq(x, args.seq_len),
-            remove_columns=["text"],
-            batched=True,
+    # Get the datasets: you can either provide your own CSV/JSON/TXT training and evaluation files (see below)
+    # or just provide the name of one of the public datasets available on the hub at https://huggingface.co/datasets/
+    # (the dataset will be downloaded automatically from the datasets Hub
+    #
+    # For CSV/JSON files, this script will use the column called 'text' or the first column. You can easily tweak this
+    # behavior (see below)
+    #
+    # In distributed training, the load_dataset function guarantee that only one local process can concurrently
+    # download the dataset.
+    if data_args.dataset_name is not None:
+        # Downloading and loading a dataset from the hub.
+        raw_datasets = load_dataset(
+            data_args.dataset_name,
+            data_args.dataset_config_name,
+            cache_dir=model_args.cache_dir,
+            use_auth_token=True if model_args.use_auth_token else None,
+            streaming=data_args.streaming,
+        )
+        if "validation" not in raw_datasets.keys():
+            raw_datasets["validation"] = load_dataset(
+                data_args.dataset_name,
+                data_args.dataset_config_name,
+                split=f"train[:{data_args.validation_split_percentage}%]",
+                cache_dir=model_args.cache_dir,
+                use_auth_token=True if model_args.use_auth_token else None,
+                streaming=data_args.streaming,
+            )
+            raw_datasets["train"] = load_dataset(
+                data_args.dataset_name,
+                data_args.dataset_config_name,
+                split=f"train[{data_args.validation_split_percentage}%:]",
+                cache_dir=model_args.cache_dir,
+                use_auth_token=True if model_args.use_auth_token else None,
+                streaming=data_args.streaming,
+            )
+    else:
+        data_files = {}
+        if data_args.train_file is not None:
+            data_files["train"] = data_args.train_file
+            extension = data_args.train_file.split(".")[-1]
+        if data_args.validation_file is not None:
+            data_files["validation"] = data_args.validation_file
+            extension = data_args.validation_file.split(".")[-1]
+        if extension == "txt":
+            extension = "text"
+        raw_datasets = load_dataset(
+            extension,
+            data_files=data_files,
+            cache_dir=model_args.cache_dir,
+            use_auth_token=True if model_args.use_auth_token else None,
         )
 
-        full_dataset.set_format("pt", columns=['input_ids', 'attention_mask', 'labels'], output_all_columns=True)
+        # If no validation data is there, validation_split_percentage will be used to divide the dataset.
+        if "validation" not in raw_datasets.keys():
+            raw_datasets["validation"] = load_dataset(
+                extension,
+                data_files=data_files,
+                split=f"train[:{data_args.validation_split_percentage}%]",
+                cache_dir=model_args.cache_dir,
+                use_auth_token=True if model_args.use_auth_token else None,
+            )
+            raw_datasets["train"] = load_dataset(
+                extension,
+                data_files=data_files,
+                split=f"train[{data_args.validation_split_percentage}%:]",
+                cache_dir=model_args.cache_dir,
+                use_auth_token=True if model_args.use_auth_token else None,
+            )
 
-        dataloader = DataLoader(full_dataset,
-            batch_size=args.batch_size,
-            pin_memory=True,
-            shuffle=True
-        )
-        return dataloader
+    # See more about loading any type of standard or custom dataset (from files, python dict, pandas DataFrame, etc) at
+    # https://huggingface.co/docs/datasets/loading_datasets.html.
 
-    # This needs to point to a directory I think
-    tokenizer = T5Tokenizer(args.tokenizer_model_path)
-
-    print("Loading and tokenizing training data...patience please..")
-    train_dataloader = load_data(tokenizer, args.train_data)
-    print("Loading and tokenizing validation data...patience please..")
-    val_dataloader = load_data(tokenizer, args.val_data)
-
-    # init these up here, can override if init_from='resume' (i.e. from a checkpoint)
-    iter_num = 0
-    best_val_loss = 1e9
-
-    #-------------------------------------------------------------------------------
-    # model init
-
-    model_args = dict(num_hidden_layers=args.num_hidden_layers, num_attention_heads=args.num_attention_heads, hidden_size=args.hidden_size, bias=args.bias, vocab_size=None, seq_len=args.seq_len, dropout=args.dropout, attention_dropout=args.attention_dropout) # start with model_args from command line
-    if args.init_from == 'scratch':
-        # init a new model from scratch
-        if master_process:
-            print("Initializing a new model from scratch")
-        # determine the vocab size we'll use for from-scratch training
-        model_args['vocab_size'] =  tokenizer.vocab_size
-        config = BevoConfig(**model_args)
-        model = BevoForCausalLM(config)
-    elif args.init_from == 'resume':
-        if master_process:
-            print(f"Resuming training from {args.out_dir}")
-        # resume training from a checkpoint.
-        ckpt_path = os.path.join(args.out_dir, 'ckpt.pt')
-        checkpoint = torch.load(ckpt_path, map_location=device)
-        checkpoint_model_args = checkpoint['model_args']
-        # force these config attributes to be equal otherwise we can't even resume training
-        # the rest of the attributes (e.g. dropout) can stay as desired from command line
-        for k in ['num_hidden_layers', 'num_attention_heads', 'hidden_size', 'seq_len', 'bias', 'vocab_size']:
-            model_args[k] = checkpoint_model_args[k]
-        # create the model
-        config = BevoConfig(**model_args)
-        model = BevoForCausalLM(config).from_pretrained(args.out_dir)
-        iter_num = checkpoint['iter_num']
-        best_val_loss = checkpoint['best_val_loss']
-
-    # Register the model
-    BevoConfig.register_for_auto_class()
-    BevoForCausalLM.register_for_auto_class('AutoModelForCausalLM')
-
-    model.to(device)
-
-    # initialize a GradScaler. If enabled=False scaler is a no-op
-    scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
-
-    # optimizer
-    optimizer = model.configure_optimizers(weight_decay, learning_rate, (beta1, beta2), device_type)
-    if args.init_from == 'resume':
-        optimizer.load_state_dict(checkpoint['optimizer'])
-    checkpoint = None # free up memory
-
-    # compile the model
-    if compile:
-        if master_process:
-            print("compiling the model... (takes a ~minute)")
-        unoptimized_model = model
-        model = torch.compile(model) # requires PyTorch 2.0
-
-    # wrap model into DDP container
-    if ddp:
-        model = DDP(model, device_ids=[ddp_local_rank])
-
-    # Since we set it up as ratios
-    eval_iters = [int((j/100)*max_iters) for j in range(0, 100+int(args.eval_interval*100), int(args.eval_interval*100))]
-    log_iters = [int((j/100)*max_iters) for j in range(0, 100+int(args.eval_interval*100), int(args.log_interval*100))]
-    import ipdb;ipdb.set_trace()
-    # helps estimate an arbitrarily accurate loss over either split using many batches
-    @torch.no_grad()
-    def estimate_loss():
-        out = {}
-        model.eval()
-        for split in ['train', 'val']:
-            dataloader = train_dataloader if split=='train' else val_dataloader
-            losses = torch.zeros(len(eval_iters))
-            for k in range(len(eval_iters)):
-                with ctx:
-                    batch = next(iter(dataloader))
-                    outputs = model(batch['input_ids'].to(device), batch['labels'].to(device))
-                losses[k] = outputs['loss'].item()
-            out[split] = losses.mean()
-        model.train()
-        return out
-
-    # learning rate decay scheduler (cosine with warmup)
-    def get_lr(it):
-        # 1) linear warmup for warmup_iters steps
-        if it < warmup_iters:
-            return learning_rate * it / warmup_iters
-        # 2) if it > lr_decay_iters, return min learning rate
-        if it > lr_decay_iters:
-            return min_lr
-        # 3) in between, use cosine decay down to min learning rate
-        decay_ratio = (it - warmup_iters) / (lr_decay_iters - warmup_iters)
-        assert 0 <= decay_ratio <= 1
-        coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff ranges 0..1
-        return min_lr + coeff * (learning_rate - min_lr)
-
-    # logging
-    if args.wandb_log and master_process:
-        import wandb
-        if args.wandb_run_name is None:
-            sys.exit("Pass a meaningful wandb_run_name argument!")
-        wandb.init(
-            project=args.wandb_project,
-            name=args.wandb_run_name,
-            config=config
-        )
-
-    lr_decay_iters = max_iters
-
-    if master_process:
-        print("number of parameters: %.2fM" % (model.module.get_num_params()/1e6,))
-        print("Number of iters: ", max_iters)
-
-    # Training loop
-    t0 = time.time()
-    local_iter_num = 0 # number of iterations in the lifetime of this process
-    raw_model = model.module if ddp else model # unwrap DDP container if needed
-    running_mfu = -1.0
+    # Load pretrained model and tokenizer
+    #
+    # Distributed training:
+    # The .from_pretrained methods guarantee that only one local process can concurrently
     
-    while True:
-        # determine and set the learning rate for this iteration
-        lr = get_lr(iter_num) if decay_lr else learning_rate
-        for param_group in optimizer.param_groups:
-            param_group['lr'] = lr
-        # evaluate the loss on train/val sets and write checkpoints
-        if iter_num in eval_iters and master_process:
-            losses = estimate_loss()
-            print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
-            if args.wandb_log:
-                wandb.log({
-                    "train/global_step": iter_num,
-                    "train/loss": losses['train'],
-                    "eval/loss": losses['val'],
-                    "lr": lr,
-                    "mfu": running_mfu*100, # convert to percentage
-                })
-            if losses['val'] < best_val_loss or args.always_save_checkpoint:
-                best_val_loss = losses['val']
-                if iter_num > 0:
-                    checkpoint = {
-                        'optimizer': optimizer.state_dict(),
-                        'model_args': model_args,
-                        'iter_num': iter_num,
-                        'best_val_loss': best_val_loss,
-                        'config': config,
-                    }
-                    print(f"saving checkpoint to {args.out_dir}")
-                    raw_model.save_pretrained(args.out_dir)
-                    tokenizer.save_pretrained(args.out_dir)
-                    torch.save(checkpoint, os.path.join(args.out_dir, 'ckpt.pt'))
-        if iter_num == 0 and args.eval_only:
-            break
+    # Load our custom tokenizer
+    tokenizer = AutoTokenizer.from_pretrained(model_args.tokenizer_name_or_path)
+    
+    # download model & vocab.
+    config_kwargs = {
+        "cache_dir": model_args.cache_dir,
+        "revision": model_args.model_revision,
+        "use_auth_token": True if model_args.use_auth_token else None,
+        "vocab_size": tokenizer.vocab_size,
+    }
+    if model_args.config_name:
+        config = AutoConfig.from_pretrained(model_args.config_name, **config_kwargs)
+    elif model_args.model_name_or_path:
+        config = AutoConfig.from_pretrained(model_args.model_name_or_path, **config_kwargs)
+    else:
+        config = CONFIG_MAPPING[model_args.model_type]()
+        logger.warning("You are instantiating a new config instance from scratch.")
+        if model_args.config_overrides is not None:
+            logger.info(f"Overriding config: {model_args.config_overrides}")
+            config.update_from_string(model_args.config_overrides)
+            logger.info(f"New config: {config}")
 
-        # Get first batch of training data
-        batch = next(iter(train_dataloader))
-        # forward backward update, with optional gradient accumulation to simulate larger batch size
-        # and using the GradScaler if data type is float16
-        for micro_step in range(gradient_accumulation_steps):
-            if ddp:
-                # in DDP training we only need to sync gradients at the last micro step.
-                # the official way to do this is with model.no_sync() context manager, but
-                # I really dislike that this bloats the code and forces us to repeat code
-                # looking at the source of that context manager, it just toggles this variable
-                model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)
-            with ctx:
-                outputs = model(batch['input_ids'].to(device), batch['labels'].to(device))
-                logits, loss = outputs['logits'], outputs['loss']
-                loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
-            # immediately async prefetch next batch while model is doing the forward pass on the GPU
-            batch = next(iter(train_dataloader))
-            # backward pass, with gradient scaling if training in fp16
-            scaler.scale(loss).backward()
-        # clip the gradient
-        if grad_clip != 0.0:
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-        # step the optimizer and scaler if training in fp16
-        scaler.step(optimizer)
-        scaler.update()
-        # flush the gradients as soon as we can, no need for this memory anymore
-        optimizer.zero_grad(set_to_none=True)
+    
+    
+    if training_args.resume_from_checkpoint:
+        model = AutoModelForMaskedLM.from_pretrained(
+            training_args.resume_from_checkpoint,
+            from_tf=bool(".ckpt" in training_args.resume_from_checkpoint),
+            config=config,
+            cache_dir=model_args.cache_dir,
+            revision=model_args.model_revision,
+            use_auth_token=True if model_args.use_auth_token else None,
+            low_cpu_mem_usage=model_args.low_cpu_mem_usage,
+            ignore_mismatched_sizes=True,
+            local_files_only=True
+        )
+    else:
+        logger.info("Training new model from scratch")
+        model = AutoModelForMaskedLM.from_config(config)
 
-        # timing and logging
-        t1 = time.time()
-        dt = t1 - t0
-        t0 = t1
-        if iter_num in log_iters == 0 and master_process:
-            # get loss as float. note: this is a CPU-GPU sync point
-            # scale up to undo the division above, approximating the true total loss (exact would have been a sum)
-            lossf = loss.item() * gradient_accumulation_steps
-            if local_iter_num >= 5: # let the training loop settle a bit
-                mfu = raw_model.estimate_mfu(args.batch_size * gradient_accumulation_steps, dt)
-                running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
-            print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
-        iter_num += 1
-        local_iter_num += 1
+    # We resize the embeddings only when necessary to avoid index errors. If you are creating a model from scratch
+    # on a small vocab and want a smaller embedding size, remove this test.
+    embedding_size = model.get_input_embeddings().weight.shape[0]
+    if len(tokenizer) > embedding_size:
+        model.resize_token_embeddings(len(tokenizer))
 
-        # termination conditions
-        if iter_num >= max_iters:
-            break
+    # Preprocessing the datasets.
+    # First we tokenize all the texts.
+    if training_args.do_train:
+        column_names = list(raw_datasets["train"].features)
+    else:
+        column_names = list(raw_datasets["validation"].features)
+    text_column_name = "text" if "text" in column_names else column_names[0]
+    
+    if data_args.line_by_line:
+        # When using line_by_line, we just tokenize each nonempty line.
+        padding = "max_length" if data_args.pad_to_max_length else False
 
-    if ddp:
-        destroy_process_group()
+        def tokenize_function(examples):
+            # Remove empty lines
+            examples[text_column_name] = [
+                line for line in examples[text_column_name] if len(line) > 0 and not line.isspace()
+            ]
+            return tokenizer(
+                examples[text_column_name],
+                padding=padding,
+                truncation=True,
+                max_length=data_args.max_seq_length,
+                # We use this option because DataCollatorForLanguageModeling (see below) is more efficient when it
+                # receives the `special_tokens_mask`.
+                return_special_tokens_mask=True,
+            )
+
+        with training_args.main_process_first(desc="dataset map tokenization"):
+            if not data_args.streaming:
+                tokenized_datasets = raw_datasets.map(
+                    tokenize_function,
+                    batched=True,
+                    num_proc=data_args.preprocessing_num_workers,
+                    remove_columns=[text_column_name],
+                    load_from_cache_file=not data_args.overwrite_cache,
+                    desc="Running tokenizer on dataset line_by_line",
+                )
+            else:
+                tokenized_datasets = raw_datasets.map(
+                    tokenize_function,
+                    batched=True,
+                    remove_columns=[text_column_name],
+                )
+    else:
+        # Otherwise, we tokenize every text, then concatenate them together before splitting them in smaller parts.
+        # We use `return_special_tokens_mask=True` because DataCollatorForLanguageModeling (see below) is more
+        # efficient when it receives the `special_tokens_mask`.
+        def tokenize_function(examples):
+            return tokenizer(examples[text_column_name], return_special_tokens_mask=True)
+
+        with training_args.main_process_first(desc="dataset map tokenization"):
+            if not data_args.streaming:
+                tokenized_datasets = raw_datasets.map(
+                    tokenize_function,
+                    batched=True,
+                    num_proc=data_args.preprocessing_num_workers,
+                    remove_columns=column_names,
+                    load_from_cache_file=not data_args.overwrite_cache,
+                    desc="Running tokenizer on every text in dataset",
+                )
+            else:
+                tokenized_datasets = raw_datasets.map(
+                    tokenize_function,
+                    batched=True,
+                    remove_columns=column_names,
+                )
+
+        # Main data processing function that will concatenate all texts from our dataset and generate chunks of
+        # data_args.max_seq_length.
+        def group_texts(examples, max_len):
+            # Concatenate all texts.
+            concatenated_examples = {k: list(chain(*examples[k])) for k in examples.keys()}
+            total_length = len(concatenated_examples[list(examples.keys())[0]])
+            # We drop the small remainder, and if the total_length < max_len  we exclude this batch and return an empty dict.
+            # We could add padding if the model supported it instead of this drop, you can customize this part to your needs.
+            total_length = (total_length // max_len) * max_len
+            # Split by chunks of max_len.
+            result = {
+                k: [t[i : i + max_len] for i in range(0, total_length, max_len)]
+                for k, t in concatenated_examples.items()
+            }
+            return result
+
+        # Note that with `batched=True`, this map processes 1,000 texts together, so group_texts throws away a
+        # remainder for each of those groups of 1,000 texts. You can adjust that batch_size here but a higher value
+        # might be slower to preprocess.
+        #
+        # To speed up this part, we use multiprocessing. See the documentation of the map method for more information:
+        # https://huggingface.co/docs/datasets/package_reference/main_classes.html#datasets.Dataset.map
+        with training_args.main_process_first(desc="grouping texts together"):
+            if not data_args.streaming:
+                tokenized_datasets['train'] = tokenized_datasets['train'].map( 
+                    lambda x: group_texts(x, max_len=data_args.max_seq_length),
+                    batched=True,
+                    num_proc=data_args.preprocessing_num_workers,
+                    load_from_cache_file=not data_args.overwrite_cache,
+                    desc=f"Grouping texts in chunks of {data_args.max_seq_length}"
+                )
+                tokenized_datasets['validation'] = tokenized_datasets['validation'].map(
+                    lambda x: group_texts(x, max_len=512),
+                    batched=True,
+                    num_proc=data_args.preprocessing_num_workers,
+                    load_from_cache_file=not data_args.overwrite_cache,
+                    desc=f"Grouping eval texts in chunks of 512"
+                )
+            else:
+                tokenized_datasets = tokenized_datasets.map(
+                    group_texts,
+                    batched=True,
+                )
+    num_params=sum(p.numel() for p in model.parameters())
+    print("MODEL SIZE: ", f'{num_params:,}')
+    if training_args.do_train:
+        if "train" not in tokenized_datasets:
+            raise ValueError("--do_train requires a train dataset")
+        train_dataset = tokenized_datasets["train"]
+        if data_args.max_train_samples is not None:
+            max_train_samples = min(len(train_dataset), data_args.max_train_samples)
+            train_dataset = train_dataset.select(range(max_train_samples))
+
+    if training_args.do_eval:
+        if "validation" not in tokenized_datasets:
+            raise ValueError("--do_eval requires a validation dataset")
+        eval_dataset = tokenized_datasets["validation"]
+        if data_args.max_eval_samples is not None:
+            max_eval_samples = min(len(eval_dataset), data_args.max_eval_samples)
+            eval_dataset = eval_dataset.select(range(max_eval_samples))
+
+        def preprocess_logits_for_metrics(logits, labels):
+            if isinstance(logits, tuple):
+                # Depending on the model and config, logits may contain extra tensors,
+                # like past_key_values, but logits always come first
+                logits = logits[0]
+            return logits.argmax(dim=-1)
+
+        metric = evaluate.load("accuracy")
+
+        def compute_metrics(eval_preds):
+            preds, labels = eval_preds
+            # preds have the same shape as the labels, after the argmax(-1) has been calculated
+            # by preprocess_logits_for_metrics
+            labels = labels.reshape(-1)
+            preds = preds.reshape(-1)
+            mask = labels != -100
+            labels = labels[mask]
+            preds = preds[mask]
+            return metric.compute(predictions=preds, references=labels)
+
+    # Data collator
+    # This one will take care of randomly masking the tokens.
+    pad_to_multiple_of_8 = data_args.line_by_line and training_args.fp16 and not data_args.pad_to_max_length
+    data_collator = DataCollatorForLanguageModeling(
+        tokenizer=tokenizer,
+        mlm_probability=data_args.mlm_probability,
+        pad_to_multiple_of=8 if pad_to_multiple_of_8 else None,
+    )
+
+    # Initialize our Trainer
+    trainer = Trainer(
+        model=model,
+        args=training_args,
+        train_dataset=train_dataset if training_args.do_train else None,
+        eval_dataset=eval_dataset if training_args.do_eval else None,
+        tokenizer=tokenizer,
+        data_collator=data_collator,
+        compute_metrics=compute_metrics if training_args.do_eval and not is_torch_tpu_available() else None,
+        preprocess_logits_for_metrics=preprocess_logits_for_metrics
+        if training_args.do_eval and not is_torch_tpu_available()
+        else None,
+    )
+
+    # Training
+    if training_args.do_train:
+        train_result = trainer.train(resume_from_checkpoint=False)
+        trainer.save_model()  # Saves the tokenizer too for easy upload
+        metrics = train_result.metrics
+
+        max_train_samples = (
+            data_args.max_train_samples if data_args.max_train_samples is not None else len(train_dataset)
+        )
+        metrics["train_samples"] = min(max_train_samples, len(train_dataset))
+
+        trainer.log_metrics("train", metrics)
+        trainer.save_metrics("train", metrics)
+        trainer.save_state()
+
+    # Evaluation
+    if training_args.do_eval:
+        logger.info("*** Evaluate ***")
+
+        metrics = trainer.evaluate()
+
+        max_eval_samples = data_args.max_eval_samples if data_args.max_eval_samples is not None else len(eval_dataset)
+        metrics["eval_samples"] = min(max_eval_samples, len(eval_dataset))
+        try:
+            perplexity = math.exp(metrics["eval_loss"])
+        except OverflowError:
+            perplexity = float("inf")
+        metrics["perplexity"] = perplexity
+
+        trainer.log_metrics("eval", metrics)
+        trainer.save_metrics("eval", metrics)
+        
+    ## This should save best model at end I think?
+    trainer.save_model()
+    trainer.save_state()
+    
+    wandb.finish()
+
+def _mp_fn(index):
+    # For xla_spawn (TPUs)
+    main()
+
+
+if __name__ == "__main__":
+    main()
