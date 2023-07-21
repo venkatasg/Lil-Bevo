@@ -63,17 +63,20 @@ To run the BLiMP benchmark:
 python babylm_eval.py PATH_TO_SAVED_MODEL 'decoder' --trust_remote_code
 ```
 
-## Baseline Models
+## Models
 
-Models in bold are ones that we trained and got results.
+## Training Regime
+
+## Results
+
+Results for our models are presented below, with baseline results.
 
 **Strict-small Track: 10M tokens**
 
 *BLiMP*
 | Model | Anaphor Agr. | Agr. Structure | Binding | Control/Raising | D-N Agr. | Ellipsis | Filler-Gap | Irregular Forms | Island Effects | NPI Licensing | Quantifiers | S-V Agr. |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| **DeBERTa-50M** | 85.9 | 68.5 | 68.3 | 64.3 | 87.8 | 84.7 | 66.9 | 83.9 | 38.5 | 51.8 | 70.5 | 68.6 |
-| **OPT-125m** | 87.3 | 67.2 | 67.7 | 63.9 | 84.4 | 56.1 | 64.5 | 88.2 | 45.0 | 51.2 | 74.3 | 64.4 |
+| **Lil-Bevo** | 85.9 | 68.5 | 68.3 | 64.3 | 87.8 | 84.7 | 66.9 | 83.9 | 38.5 | 51.8 | 70.5 | 68.6 |
 | OPT-125m | 63.8 | 70.6 | 67.1 | 66.5 | 78.5 | 62 | 63.8 | 67.5 | 48.6 | 46.7 | 59.6 | 56.9 |
 | RoBERTa-base | 81.5 | 67.1 | 67.3 | 67.9 | 90.8 | 76.4 | 63.5 | 87.4 | 39.9 | 55.9 | 70.5 | 65.4 |
 | T5-base | 68.9 | 63.8 | 60.4 | 60.9 | 72.2 | 34.4 | 48.2 | 77.6 | 45.6 | 47.8 | 61.2 | 65.0 |
@@ -81,33 +84,8 @@ Models in bold are ones that we trained and got results.
 *(Super)GLUE*
 | Model | CoLA | SST-2 | MRPC (F1) | QQP (F1) | MNLI | MNLI-mm | QNLI | RTE | BoolQ | MultiRC | WSC |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| **DeBERTa-50M** | 70.7 | 88.4 | 80.9 | 83.7 | 73.9 | 73.7 | 78.1 | 47.5 | 64.6 | 60.7 | 61.4 |
+| **Lil-Bevo-X** | 70.7 | 88.4 | 80.9 | 83.7 | 73.9 | 73.7 | 78.1 | 47.5 | 64.6 | 60.7 | 61.4 |
 | Majority label | 69.5 | 50.2 | 82 | 53.1 | 35.7 | 35.7 | 35.4 | 53.1 | 50.5 | 59.9 | 53.2 | 61.4 |
 | OPT-125m | 64.6 | 81.9 | 72.5 | 60.4 | 57.6 | 60.0 | 61.5 | 60.0 | 63.3 | 55.2 | 60.2 |
 | RoBERTa-base | 70.8 | 87.0 | 79.2 | 73.7 | 73.2 | 74.0 | 77.0 | 61.6 | 66.3 | 61.4 | 61.4 |
 | T5-base | 61.2 | 78.1 | 80.5 | 66.2 | 48.0 | 50.3 | 62.0 | 49.4 | 66.0 | 47.1 | 61.4 |
-
-
-
-## Music
-
-### MAESTRO
-
-We attempted pretraining with the [MAESTRO]() dataset, in addition to the 10M tokens in the training data, to see if hierarchical information in music might help. Convert all the midi files into one big text file (split every 1000 spaces) using `midi_to_text.py`. Then train a tokenizer on the combined file:
-
-```
-python midi/midi_to_text.py babylm_data/maestro/*/*.midi > sed 's/ /\n/1000; P; D' > babylm_data/maestro/midi.txt
- cat babylm_data/babylm_10M/all.txt babylm_data/maestro/midi.txt
- > babylm_data/maestro/all.txt
-```
-
-The following results are for a tokenizer trained on the 10M tokens + MAESTRO, with similar pretraining paradigm in all 3 cases.
-
-**Strict-small Track: 10M tokens**
-
-*BLiMP*
-| Model | Anaphor Agr. | Agr. Structure | Binding | Control/Raising | D-N Agr. | Ellipsis | Filler-Gap | Irregular Forms | Island Effects | NPI Licensing | Quantifiers | S-V Agr. |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| **DeBERTa** | 83.13 | 68.5 | 67.0 | 64.3 | 82.9 | 62.4 | 64.6 | 88.3 | 49.8 | 51.2 | 72.2 | 64.4 |
-| **DeBERTa+maestro** | 83.3 | 68.0 | 66.8 | 64.0 | 83.0 | 60.4 | 65.1 | 87.6 | 50.0 | 53.0 | 69.3 | 63.8 |
-| OPT-125m-babyLM-baseline | 63.8 | 70.6 | 67.1 | 66.5 | 78.5 | 62 | 63.8 | 67.5 | 48.6 | 46.7 | 59.6 | 56.9 |
