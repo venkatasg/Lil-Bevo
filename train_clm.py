@@ -63,19 +63,16 @@ def main():
 
     parser.add_argument('-o', '--outputdirectory', type=str, help='Where to save trained model checkpoint.')
     parser.add_argument('-t', '--train_dir', type=str, help='train directory')
-    parser.add_argument('-d', '--dev_dir', type=str, help='dev directory')
     parser.add_argument('-c', '--load_model', type=str, help='checkpoint to load')
     parser.add_argument('-s', '--from_scratch', action='store_true', help='Train deberta from scratch?')
     parser.add_argument('-e', '--epochs', type=int, help='Number of training epochs')
     parser.add_argument('-tb', '--per_device_train_batch_size', type=int, help='per device train Batch size')
-    parser.add_argument('-db', '--per_device_eval_batch_size', type=int, help='per device eval Batch size')
     parser.add_argument('-lm', '--mlm_or_clm', type=str, help='Masked lm or corrective lm')
     args = parser.parse_args()
 
     outputdirectory = args.outputdirectory
     load_checkpoint_dir = args.load_model
     train_dir = args.train_dir
-    dev_dir = args.dev_dir
     from_scratch = args.from_scratch
     num_epochs = args.epochs
     data_collator_type = args.mlm_or_clm
@@ -84,12 +81,8 @@ def main():
         raise ValueError("Must be mlm or clm")
 
     #NOTE: this is the 512- token version. For the 128-token version, see the other .txt files
-    def load_original_and_replaced(train_dir, dev_dir, num_samples=None):
+    def load_original_and_replaced(train_dir, num_samples=None):
         print("Loading data...")
-        with open(os.path.join(dev_dir, "dev-original.txt"),'r') as fd:
-            devtext_orig = fd.readlines()
-        with open(os.path.join(dev_dir, "dev-replaced.txt"),'r') as fd:
-            devtext_repl = fd.readlines()
 
         with open(os.path.join(train_dir, "train-original.txt"),'r') as fd:
             traintext_orig = fd.readlines()
@@ -97,15 +90,12 @@ def main():
             traintext_repl = fd.readlines()
 
         if num_samples is not None:
-            devtext_orig = devtext_orig[:num_samples]
             traintext_orig = traintext_orig[:num_samples]
-            devtext_repl = devtext_repl[:num_samples]
             traintext_repl = traintext_repl[:num_samples]
 
-        devdata = Dataset.from_dict({"origtext":devtext_orig, "repltext":devtext_repl })
         traindata = Dataset.from_dict({"origtext":traintext_orig, "repltext":traintext_repl})
 
-        dataset = DatasetDict({"train": traindata, "validation": devdata} )
+        dataset = DatasetDict({"train": traindata} )
         print("Done loading data...")
         return dataset
 
@@ -202,9 +192,6 @@ def main():
     #num_samples = 1000 #None
     num_samples = None
 
-    #dev_dir = 'babylm_data/babylm_dev'
-    #train_dir = 'babylm_data/babylm_10M'
-
     if from_scratch:
         tokenizer = AutoTokenizer.from_pretrained('tokenizers/10m_maestro/', use_fast=True)
         config_kwargs = {
@@ -236,7 +223,7 @@ def main():
     print(f"'>>> Number of parameters: {round(num_parameters)}M'")
 
 
-    dataset = load_original_and_replaced(train_dir, dev_dir, num_samples=num_samples)
+    dataset = load_original_and_replaced(train_dir, num_samples=num_samples)
 
     tokenized_dataset = dataset.map(partial(tokenize_function2, tokenizer),
                                     batched=True,
@@ -257,12 +244,10 @@ def main():
     training_args = TrainingArguments(
         output_dir=outputdirectory,
         overwrite_output_dir=True,
-        evaluation_strategy="steps",
-        eval_steps=100,
+        evaluation_strategy="no",
         save_strategy="steps",
-        save_steps=100,
+        save_steps=200,
         per_device_train_batch_size=args.per_device_train_batch_size,
-        per_device_eval_batch_size=args.per_device_eval_batch_size,
         num_train_epochs=num_epochs,#50,
         push_to_hub=False,
         # THIS IS IMPORTANT, because need to keep `word_ids` during training
@@ -270,14 +255,10 @@ def main():
         fp16=False, #speed boost
         logging_steps=10,
         report_to='wandb',
-        learning_rate=1e-5,
-        weight_decay=0,
-        warmup_ratio=0,
-        optim='adamw_torch_fused',
+        optim='adamw_torch',
         torch_compile=True,
-        ddp_backend='nccl',
         load_best_model_at_end=False,
-        disable_tqdm=True
+        disable_tqdm=False
     )
 
     #TODO need custom Trainer with custom loss? Maybe not
@@ -285,7 +266,6 @@ def main():
         model=model,
         args=training_args,
         train_dataset=tokenized_dataset["train"],
-        eval_dataset=tokenized_dataset["validation"],
         data_collator=selected_data_collator,#, whole_word_masking_data_collator,#data_collator,
         tokenizer=tokenizer
         #compute_metrics= #function to compute metrics here
