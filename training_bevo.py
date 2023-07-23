@@ -495,7 +495,7 @@ def main():
                     desc=f"Grouping texts in chunks of {data_args.max_seq_length}"
                 )
                 tokenized_datasets['validation'] = tokenized_datasets['validation'].map(
-                    lambda x: group_texts(x, max_len=512),
+                    lambda x: group_texts(x, max_len=128),
                     batched=True,
                     num_proc=data_args.preprocessing_num_workers,
                     load_from_cache_file=not data_args.overwrite_cache,
