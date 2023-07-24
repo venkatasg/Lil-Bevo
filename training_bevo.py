@@ -499,7 +499,7 @@ def main():
                     batched=True,
                     num_proc=data_args.preprocessing_num_workers,
                     load_from_cache_file=not data_args.overwrite_cache,
-                    desc=f"Grouping eval texts in chunks of 512"
+                    desc=f"Grouping eval texts in chunks of 128"
                 )
             else:
                 tokenized_datasets = tokenized_datasets.map(
