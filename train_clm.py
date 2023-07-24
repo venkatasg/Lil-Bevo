@@ -246,19 +246,20 @@ def main():
         overwrite_output_dir=True,
         evaluation_strategy="no",
         save_strategy="steps",
-        save_steps=200,
+        save_steps=100,
         per_device_train_batch_size=args.per_device_train_batch_size,
-        num_train_epochs=num_epochs,#50,
+        num_train_epochs=num_epochs,
         push_to_hub=False,
         # THIS IS IMPORTANT, because need to keep `word_ids` during training
         remove_unused_columns = False,
         fp16=False, #speed boost
         logging_steps=10,
+        save_total_limit=5,
         report_to='wandb',
-        optim='adamw_torch',
+        optim='adamw_torch_fused',
         torch_compile=True,
         load_best_model_at_end=False,
-        disable_tqdm=False
+        disable_tqdm=True
     )
 
     #TODO need custom Trainer with custom loss? Maybe not

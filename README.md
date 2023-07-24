@@ -52,26 +52,27 @@ Results for our models are presented below, with baseline results. Lil-Bevo resu
 *BLiMP*
 | Model | Anaphor Agr. | Agr. Structure | Binding | Control/Raising | D-N Agr. | Ellipsis | Filler-Gap | Irregular Forms | Island Effects | NPI Licensing | Quantifiers | S-V Agr. |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Lil-Bevo | 87.8 | 74.5 | 63.0 | 67.5 | 88.8 | 79.6 | 76.0 | 81.2 | 60.4 | 77.4 | 72.2 | 80.4 |
-| Lil-Bevo-X | 96.7 | 81.3 | 65.7 | 72.5 | 95.2 | 82.5 | 82.2 | 88.9 | 70.6 | 83.4 | 59.9 | 88.9 |
+| Lil-Bevo | 92.0 | 76.6 | 61.5 | 67.5 | 90.5 | 81.5 | 79.5 | 86.4 | 57.8 | 80.4 | 68.8 | 83.2 |
+| Lil-Bevo-X | 97.2 | 80.6 | 63.9 | 69.5 | 96.4 | 87.0 | 78.4 | 89.2 | 71.4 | 85.6 | 63.2 | 86.3 |
+
 
 *BLiMP Supplement*
 | Model | Hypernym | QA Congruence (easy) | QA Congruence (tricky) | Subj.-Aux. Inversion | Turn Taking |
 | --- | --- | --- | --- | --- | --- |
-| Lil-Bevo | 48.6 | 68.8 | 57.0 | 81.2 | 62.9 |
-| Lil-Bevo-X | 45.7 | 76.6 | 57.6 | 82.4 | 79.3 |
+| Lil-Bevo | 49.0 | 70.3 | 51.5 | 81.7 | 67.9 |
+| Lil-Bevo-X | 45.2 | 75.0 | 63.6 | 81.4 | 78.2 |
 
 *(Super)GLUE*
 | Model | CoLA | SST-2 | MRPC (F1) | QQP (F1) | MNLI | MNLI-mm | QNLI | RTE | BoolQ | MultiRC | WSC |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Lil-Bevo | 71.2 | 89.6 | 80.7 | 84.8 | 76.0 | 76.4 | 82.0 | 54.5 | 67.6 | 62.8 | 57.8 |
-| Lil-Bevo-X| 76.5 | 90.8 | 82.4 | 87.6 | 78.1 | 80.7 | 85.7 | 53.5 | 67.2 | 64.8 | 61.4 |
+| Lil-Bevo | 74.5 | 87.4 | 82.2 | 84.6 | 75.6 | 76.6 | 82.7 | 54.5 | 64.7 | 62.3 | 61.5 |
+| Lil-Bevo-X| 776.5 | 88.8 | 82.6 | 86.4 | 77.7 | 79.0 | 83.6 | 49.5 | 68.0 | 65.6 | 61.4 |
 
 *MSGS*
-| Model | CR (Control) | LC (Control) | MV (Control) | RP (Control) | SC (Control) | CR_LC | CR_RTP | MV_LC | MV_RTP | SC_LC | SC_RP |
+| Model | CR (Control) | CR_LC | CR_RTP | LC (Control) | MV (Control) | MV_LC | MV_RTP | RP (Control) | SC (Control) | SC_LC | SC_RP |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Lil-Bevo | 892.5 | 66.7 | 66.9 | 87.8 | 100.0 | 69.3 | 69.2 | 97.5 | 91.5 | 69.0 | 66.7 |
-| Lil-Bevo-X | 90.0 | 68.1 | 66.9 | 100.0 | 100.0 | 66.8 | 84.5 | 99.3 | 95.4 | 68.4 | 64.9 | 
+| Lil-Bevo | 92.7 | 66.6 | 66.9 | 88.0 | 100.0 | 77.5 | 70.7 | 96.1 | 87.0 | 69.5 | 66.7 |
+| Lil-Bevo-X | 92.5 | 66.5 | 68.5 | 100.0 | 100.0 | 66.7 | 68.5 | 99.1 | 90.0 | 68.2 | 64.7 | 
 
 *Age-of-acquisition Prediction*
 (Mean absolute deviation in months across LOO cross-validation folds)
