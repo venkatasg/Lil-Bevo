@@ -77,8 +77,8 @@ def main():
     num_epochs = args.epochs
     data_collator_type = args.mlm_or_clm
 
-    if data_collator_type not in ['mlm','clm']:
-        raise ValueError("Must be mlm or clm")
+    if data_collator_type not in ['mlm','clm','mlmfill']:
+        raise ValueError("Must be mlm or clm or mlmfill")
 
     #NOTE: this is the 512- token version. For the 128-token version, see the other .txt files
     def load_original_and_replaced(train_dir, num_samples=None):
@@ -163,6 +163,38 @@ def main():
             feature['input_ids'] = [i if replaced[ii] == original[ii] else mask_token_id for ii,i in enumerate(original)]
 
         return default_data_collator(features)
+
+
+    def mlm_data_collator_fill(features):
+    """ In addition to the targeted MLM, add random masks so that 15% of tokens are masked.
+    """
+        pad_token = -100
+        mask_token_id = tokenizer.mask_token_id
+
+        for feature in features:
+            #replaced = feature.pop("replaced")
+            replaced = feature['input_ids']
+            original = feature['labels']
+
+            # note labels are the original uncorrupted version. Will only compute
+            # loss over the modified tokens so:
+            newlabels = [-100 if replaced[ii]==original[ii] else i for ii,i in enumerate(original) ]
+            #feature['labels'] = newlabels
+
+            newinputs = [i if replaced[ii] == original[ii] else mask_token_id for ii,i in enumerate(original)]
+
+            valid_indices = np.where(np.array(newinputs) != mask_token_id)[0]
+            num_replaced = len(newinputs) - len(valid_indices)
+            N = max(0, int(len(newinputs)*.15) - num_replaced)
+            random_indices = np.random.choice(valid_indices, size=N, replace=False)
+            for index in random_indices:
+                newlabels[index] = original[index]
+                newinputs[index] = mask_token_id
+
+            feature['input_ids'] = newinputs
+            feature['labels'] = newlabels
+
+        return default_data_collator(features)
     
 
     def clm_data_collator(features):
@@ -188,6 +220,9 @@ def main():
 
     if data_collator_type == 'mlm':
         selected_data_collator = mlm_data_collator
+
+    if data_collator_type == 'mlmfill':
+        selected_data_collator = mlm_data_collator_fill
     
     #num_samples = 1000 #None
     num_samples = None
