@@ -66,7 +66,7 @@ Results for our models are presented below, with baseline results. Lil-Bevo resu
 | Model | CoLA | SST-2 | MRPC (F1) | QQP (F1) | MNLI | MNLI-mm | QNLI | RTE | BoolQ | MultiRC | WSC |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Lil-Bevo | 74.5 | 87.4 | 82.2 | 84.6 | 75.6 | 76.6 | 82.7 | 54.5 | 64.7 | 62.3 | 61.5 |
-| Lil-Bevo-X| 776.5 | 88.8 | 82.6 | 86.4 | 77.7 | 79.0 | 83.6 | 49.5 | 68.0 | 65.6 | 61.4 |
+| Lil-Bevo-X| 76.5 | 88.8 | 82.6 | 86.4 | 77.7 | 79.0 | 83.6 | 49.5 | 68.0 | 65.6 | 61.4 |
 
 *MSGS*
 | Model | CR (Control) | CR_LC | CR_RTP | LC (Control) | MV (Control) | MV_LC | MV_RTP | RP (Control) | SC (Control) | SC_LC | SC_RP |
