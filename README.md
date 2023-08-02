@@ -65,31 +65,31 @@ Results for our models are presented below, with baseline results. Lil-Bevo resu
 *BLiMP*
 | Model | Anaphor Agr. | Agr. Structure | Binding | Control/Raising | D-N Agr. | Ellipsis | Filler-Gap | Irregular Forms | Island Effects | NPI Licensing | Quantifiers | S-V Agr. |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Lil-Bevo | 92.0 | 76.6 | 61.5 | 67.5 | 90.5 | 81.5 | 79.5 | 86.4 | 57.8 | 80.4 | 68.8 | 83.2 |
+| Lil-Bevo | 90.9 | 72.5 | 63.3 | 70.0 | 91.7 | 82.0 | 77.5 | 85.3 | 55.8 | 78.5 | 68.7 | 84.8 | 
 | Lil-Bevo-X | 97.2 | 80.6 | 63.9 | 69.5 | 96.4 | 87.0 | 78.4 | 89.2 | 71.4 | 85.6 | 63.2 | 86.3 |
 
 
 *BLiMP Supplement*
 | Model | Hypernym | QA Congruence (easy) | QA Congruence (tricky) | Subj.-Aux. Inversion | Turn Taking |
 | --- | --- | --- | --- | --- | --- |
-| Lil-Bevo | 49.0 | 70.3 | 51.5 | 81.7 | 67.9 |
+| Lil-Bevo | 48.1 | 82.8 | 57.0 | 76.5 | 68.2 |
 | Lil-Bevo-X | 45.2 | 75.0 | 63.6 | 81.4 | 78.2 |
 
 *(Super)GLUE*
 | Model | CoLA | SST-2 | MRPC (F1) | QQP (F1) | MNLI | MNLI-mm | QNLI | RTE | BoolQ | MultiRC | WSC |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Lil-Bevo | 74.5 | 87.4 | 82.2 | 84.6 | 75.6 | 76.6 | 82.7 | 54.5 | 64.7 | 62.3 | 61.5 |
+| Lil-Bevo | 73.7 | 88.4 | 82.2 | 85.5 | 75.4 | 76.3 | 81.6 | 46.5 | 65.4 | 66.0 | 61.5 |
 | Lil-Bevo-X| 76.5 | 88.8 | 82.6 | 86.4 | 77.7 | 79.0 | 83.6 | 49.5 | 68.0 | 65.6 | 61.4 |
 
 *MSGS*
 | Model | CR (Control) | CR_LC | CR_RTP | LC (Control) | MV (Control) | MV_LC | MV_RTP | RP (Control) | SC (Control) | SC_LC | SC_RP |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Lil-Bevo | 92.7 | 66.6 | 66.9 | 88.0 | 100.0 | 77.5 | 70.7 | 96.1 | 87.0 | 69.5 | 66.7 |
+| Lil-Bevo | 91.9 | 66.6 | 67.4 | 100.0 | 99.8 | 75.7 | 78.0 | 93.8 | 91.5 | 65.7 | 64.2 |
 | Lil-Bevo-X | 92.5 | 66.5 | 68.5 | 100.0 | 100.0 | 66.7 | 68.5 | 99.1 | 90.0 | 68.2 | 64.7 | 
 
 *Age-of-acquisition Prediction*
 (Mean absolute deviation in months across LOO cross-validation folds)
 | Model | Overall (591 words) | Nouns (322) | Predicates (167) | Function words (102) |
 | --- | --- | --- | --- | --- |
-| Lil-Bevo |  |  |  |  |
+| Lil-Bevo | 2.06 | 2.0 | 1.84 | 2.65 |
 | Lil-Bevo-X |  |  |  |  |
