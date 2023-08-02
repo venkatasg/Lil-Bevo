@@ -19,7 +19,7 @@ pip install git+https://github.com/huggingface/transformers wandb ipdb datasets 
 
 ```
 export WANDB_PROJECT="lil-bevo"
-python training_decoder.py --config_name facebook/opt-125m --tokenizer_name tokenizers/babylm_10m_uni_16k.model --train_file babylm_data/babylm_10M/train.txt --validation_file babylm_data/babylm_dev/dev.txt --per_device_train_batch_size 8 --per_device_eval_batch_size 8 --do_train --num_train_epochs 10 --do_eval --logging_steps 0.02 --logging_first_step True --eval_steps 0.1 --max_eval_samples 5000 --save_steps 1 --evaluation_strategy steps --output_dir opt-125m-16k-10epochs --report_to wandb --run_name opt-125m-16k-10epochs --overwrite_output_dir 
+python training_bevo.py --config_name microsoft/deberta-v3-small --tokenizer_name_or_path tokenizers/10m_maestro/ --train_file babylm_data/maestro/all-10M.txt --validation_file babylm_data/babylm_dev/dev.txt --per_device_train_batch_size 770 --per_device_eval_batch_size 128 --do_train --num_train_epochs 5 --do_eval --save_strategy epoch --optim adamw_torch_fused --warmup_ratio=0.0001 --weight_decay 0.1 --log_level error --learning_rate 5e-4 --evaluation_strategy steps --eval_steps 500 --output_dir deberta-small/redux/ --logging_steps 10 --save_total_limit 1 --overwrite_output_dir --torch_compile True --disable_tqdm False --max_seq_length 32 --report_to wandb
 ```
 
 ## Evaluation
@@ -45,9 +45,22 @@ We trained two models, one for the strict-small track and another for the strict
 
 ## Training Regime
 
+1. 5 epochs on MAESTRO dataset (85M non-language music tokens) combined with strict small dataset.
+2. 50 epochs of pretraining with sequence length of 128 on strict/strict-small dataset.
+3. 2 epochs of targeted MLM.
+
+Please read [our paper]() to get more details on our training regime and reasoning behind these decisions.
+
 ## Results
 
 Results for our models are presented below, with baseline results. Lil-Bevo results are for the strict-small track(10M tokens), while Lil-Bevo-X are for the strict track(100M tokens).
+
+*DynaBench*
+
+| Model | Score |
+| --- | --- | 
+| Lil-Bevo | 0.70 |
+| Lil-Bevo-X | 0.73 | 
 
 *BLiMP*
 | Model | Anaphor Agr. | Agr. Structure | Binding | Control/Raising | D-N Agr. | Ellipsis | Filler-Gap | Irregular Forms | Island Effects | NPI Licensing | Quantifiers | S-V Agr. |
