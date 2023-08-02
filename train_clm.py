@@ -166,8 +166,6 @@ def main():
 
 
     def mlm_data_collator_fill(features):
-    """ In addition to the targeted MLM, add random masks so that 15% of tokens are masked.
-    """
         pad_token = -100
         mask_token_id = tokenizer.mask_token_id
 
@@ -280,8 +278,7 @@ def main():
         output_dir=outputdirectory,
         overwrite_output_dir=True,
         evaluation_strategy="no",
-        save_strategy="steps",
-        save_steps=100,
+        save_strategy="epoch",
         per_device_train_batch_size=args.per_device_train_batch_size,
         num_train_epochs=num_epochs,
         push_to_hub=False,
@@ -289,9 +286,12 @@ def main():
         remove_unused_columns = False,
         fp16=False, #speed boost
         logging_steps=10,
-        save_total_limit=5,
+        save_total_limit=10,
         report_to='wandb',
         optim='adamw_torch_fused',
+        # warmup_ratio=0.0001,
+        # weight_decay=0.1,
+        # learning_rate=6e-4,
         torch_compile=True,
         load_best_model_at_end=False,
         disable_tqdm=True
