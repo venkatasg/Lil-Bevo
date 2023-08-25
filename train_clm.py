@@ -285,13 +285,13 @@ def main():
         # THIS IS IMPORTANT, because need to keep `word_ids` during training
         remove_unused_columns = False,
         fp16=False, #speed boost
-        logging_steps=10,
+        logging_steps=50,
         save_total_limit=10,
         report_to='wandb',
         optim='adamw_torch_fused',
-        # warmup_ratio=0.0001,
-        # weight_decay=0.1,
-        # learning_rate=6e-4,
+        warmup_ratio=0,
+        weight_decay=0,
+        learning_rate=1e-5,
         torch_compile=True,
         load_best_model_at_end=False,
         disable_tqdm=True

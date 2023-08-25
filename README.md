@@ -1,6 +1,6 @@
 # Lil Bevo &mdash; UT Austin's submission to BabyLM Challenge
 
-This repository contains Lil Bevo &mdash; UT Austin's submission towards the [BabyLM Challenge](https://babylm.github.io).
+This repository contains code and instructions to build Lil Bevo &mdash; UT Austin's submission towards the [BabyLM Challenge](https://babylm.github.io).
 
 ## Python Environment
 
@@ -43,17 +43,22 @@ We trained two models, one for the strict-small track and another for the strict
 - [Lil-Bevo](https://huggingface.co/venkatasg/lil-bevo) is based on a `deberta-small-v3` model, and has 55M parameters with a vocab size of 16640.
 - [Lil-Bevo-X](https://huggingface.co/venkatasg/lil-bevo-x) is based on a `deberta-base-v3` model and has 112M parameters with a vocab size of 33280.
 
-## Training Regime
+## Training Regime for Lil-Bevo
 
 1. 5 epochs on MAESTRO dataset (85M non-language music tokens) combined with strict small dataset.
-2. 50 epochs of pretraining with sequence length of 128 on strict/strict-small dataset.
+2. 50 epochs of pretraining with sequence length of 128 on strict-small dataset.
 3. 2 epochs of targeted MLM.
+
+## Training Regime for Lil-Bevo-X
+
+1. 5 epochs on MAESTRO dataset (85M non-language music tokens) combined with strict small dataset.
+2. 50 epochs of pretraining with sequence length of 128 on strict dataset.
+3. 150 epochs of pretraining with sequence length of 512 on strict dataset.
+4. 10 epochs of targeted MLM.
 
 Please read [our paper]() to get more details on our training regime and reasoning behind these decisions.
 
 ## Results
-
-Results for our models are presented below, with baseline results. Lil-Bevo results are for the strict-small track(10M tokens), while Lil-Bevo-X are for the strict track(100M tokens).
 
 *DynaBench*
 
