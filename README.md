@@ -43,6 +43,8 @@ We trained two models, one for the strict-small track and another for the strict
 - [Lil-Bevo](https://huggingface.co/venkatasg/lil-bevo) is based on a `deberta-small-v3` model, and has 55M parameters with a vocab size of 16640.
 - [Lil-Bevo-X](https://huggingface.co/venkatasg/lil-bevo-x) is based on a `deberta-base-v3` model and has 112M parameters with a vocab size of 33280.
 
+We also pretrained some ablation models, details in [our paper](). You can find all of our models in [this Huggingface collection](\url{https://huggingface.co/collections/venkatasg/babylm-653591cdb66f4bf68922873a})
+
 ## Training Regime for Lil-Bevo
 
 1. 5 epochs on MAESTRO dataset (85M non-language music tokens) combined with strict small dataset.
@@ -97,4 +99,4 @@ Please read [our paper]() to get more details on our training regime and reasoni
 | Model | Overall (591 words) | Nouns (322) | Predicates (167) | Function words (102) |
 | --- | --- | --- | --- | --- |
 | Lil-Bevo | 2.06 | 2.0 | 1.84 | 2.65 |
-| Lil-Bevo-X |  |  |  |  |
+| Lil-Bevo-X | 2.05 | 1.99  | 1.85 | 2.59 |
