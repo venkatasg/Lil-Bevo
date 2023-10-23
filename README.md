@@ -66,8 +66,8 @@ Please read [our paper]() to get more details on our training regime and reasoni
 
 | Model | Score |
 | --- | --- | 
-| Lil-Bevo | 0.70 |
-| Lil-Bevo-X | 0.73 | 
+| Lil-Bevo | 0.64 |
+| Lil-Bevo-X | 0.69 | 
 
 *BLiMP*
 | Model | Anaphor Agr. | Agr. Structure | Binding | Control/Raising | D-N Agr. | Ellipsis | Filler-Gap | Irregular Forms | Island Effects | NPI Licensing | Quantifiers | S-V Agr. |
