@@ -15,7 +15,7 @@ pip install git+https://github.com/huggingface/transformers wandb ipdb datasets 
 
 ## Scripts
 
-`training_bevo.py` takes as argument any decoder style LM on the Huggingface Hub, and trains the model on babyLM data. First, concatenate all the train and dev files into one text file to pass as input to this script (`cat babylm_data/babylm_10M/*.train > train.txt`). Set the `WANDB_PROJECT` environment variable to **lil-bevo** and run.
+`training_bevo.py` takes as argument any encoder style LM on the Huggingface Hub, and trains the model on babyLM data. First, concatenate all the train and dev files into one text file to pass as input to this script (`cat babylm_data/babylm_10M/*.train > train.txt`). Set the `WANDB_PROJECT` environment variable to **lil-bevo** and run.
 
 ```
 export WANDB_PROJECT="lil-bevo"
